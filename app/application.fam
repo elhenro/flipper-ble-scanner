@@ -1,0 +1,12 @@
+App(
+    appid="ble_scanner",
+    name="BLE Scanner",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="ble_scanner_main",
+    requires=["gui", "storage"],
+    stack_size=3 * 1024,
+    fap_category="Bluetooth",
+    fap_icon="icon.png",
+    fap_version="0.2",
+    fap_description="BLE scan with RSSI distance, vendor labels and GATT browser. Needs full BLE stack + patched firmware",
+)

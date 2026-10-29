@@ -1,0 +1,141 @@
+diff --git a/targets/f7/api_symbols.csv b/targets/f7/api_symbols.csv
+index 3ed0bea..1907faa 100644
+--- a/targets/f7/api_symbols.csv
++++ b/targets/f7/api_symbols.csv
+@@ -1,5 +1,5 @@
+ entry,status,name,type,params
+-Version,+,87.1,,
++Version,+,87.2,,
+ Header,+,applications/drivers/subghz/cc1101_ext/cc1101_ext_interconnect.h,,
+ Header,+,applications/main/archive/helpers/archive_helpers_ext.h,,
+ Header,+,applications/services/applications.h,,
+@@ -1383,6 +1383,7 @@ Function,+,furi_hal_bt_get_key_storage_buff,void,"uint8_t**, uint16_t*"
+ Function,+,furi_hal_bt_get_radio_stack,FuriHalBtStack,
+ Function,+,furi_hal_bt_get_rssi,float,
+ Function,+,furi_hal_bt_get_transmitted_packets,uint32_t,
++Function,+,furi_hal_bt_hci_command,uint8_t,"uint16_t, const void*, uint8_t, void*, uint8_t"
+ Function,-,furi_hal_bt_init,void,
+ Function,+,furi_hal_bt_is_active,_Bool,
+ Function,+,furi_hal_bt_is_alive,_Bool,
+@@ -1399,10 +1400,12 @@ Function,+,furi_hal_bt_start_packet_rx,void,"uint8_t, uint8_t"
+ Function,+,furi_hal_bt_start_packet_tx,void,"uint8_t, uint8_t, uint8_t"
+ Function,+,furi_hal_bt_start_radio_stack,_Bool,
+ Function,+,furi_hal_bt_start_rx,void,uint8_t
++Function,+,furi_hal_bt_start_scan,uint8_t,"uint16_t, uint16_t, _Bool"
+ Function,+,furi_hal_bt_start_tone_tx,void,"uint8_t, uint8_t"
+ Function,+,furi_hal_bt_stop_advertising,void,
+ Function,+,furi_hal_bt_stop_packet_test,uint16_t,
+ Function,+,furi_hal_bt_stop_rx,void,
++Function,+,furi_hal_bt_stop_scan,void,
+ Function,+,furi_hal_bt_stop_tone_tx,void,
+ Function,+,furi_hal_bt_unlock_core2,void,
+ Function,+,furi_hal_bt_update_battery_level,void,uint8_t
+diff --git a/targets/f7/ble_glue/gap.c b/targets/f7/ble_glue/gap.c
+index 38fc5e4..c6786ce 100644
+--- a/targets/f7/ble_glue/gap.c
++++ b/targets/f7/ble_glue/gap.c
+@@ -356,8 +356,13 @@ static void gap_init_svc(Gap* gap, const GapRootSecurityKeys* root_keys) {
+     // Initialize GAP interface
+     // Skip fist symbol AD_TYPE_COMPLETE_LOCAL_NAME
+     char* name = gap->service.adv_name + 1;
++    // observer (scan) and central (outgoing connections) need full stack, light rejects them
++    uint8_t role = GAP_PERIPHERAL_ROLE;
++    if(furi_hal_bt_get_radio_stack() == FuriHalBtStackFull) {
++        role |= GAP_OBSERVER_ROLE | GAP_CENTRAL_ROLE;
++    }
+     aci_gap_init(
+-        GAP_PERIPHERAL_ROLE,
++        role,
+         0,
+         strlen(name),
+         &gap->service.gap_svc_handle,
+diff --git a/targets/f7/furi_hal/furi_hal_bt.c b/targets/f7/furi_hal/furi_hal_bt.c
+index 4c619c2..b834398 100644
+--- a/targets/f7/furi_hal/furi_hal_bt.c
++++ b/targets/f7/furi_hal/furi_hal_bt.c
+@@ -267,6 +267,38 @@ void furi_hal_bt_stop_advertising(void) {
+     }
+ }
+ 
++uint8_t furi_hal_bt_start_scan(uint16_t interval, uint16_t window, bool active) {
++    // light stack is peripheral only, gap observer role exists only on full stack
++    if(furi_hal_bt.stack != FuriHalBtStackFull) return BLE_STATUS_FAILED;
++    // active sends scan requests so peers answer with scan response (names live there)
++    // public own address, no duplicate filter (keeps rssi updates), accept all
++    return aci_gap_start_observation_proc(interval, window, active, 0, 0, 0);
++}
++
++void furi_hal_bt_stop_scan(void) {
++    if(furi_hal_bt.stack == FuriHalBtStackFull) aci_gap_terminate_gap_proc(GAP_OBSERVATION_PROC);
++}
++
++uint8_t furi_hal_bt_hci_command(
++    uint16_t opcode,
++    const void* params,
++    uint8_t params_len,
++    void* resp,
++    uint8_t resp_len) {
++    uint8_t status = BLE_STATUS_FAILED;
++    // hci_send_req handles both command status (status byte) and complete (return params)
++    struct hci_request rq = {
++        .ogf = opcode >> 10,
++        .ocf = opcode & 0x3FF,
++        .cparam = (void*)params,
++        .clen = params_len,
++        .rparam = resp_len ? resp : &status,
++        .rlen = resp_len ? resp_len : 1,
++    };
++    if(hci_send_req(&rq, false) < 0) return BLE_STATUS_TIMEOUT;
++    return resp_len ? *(uint8_t*)resp : status;
++}
++
+ void furi_hal_bt_update_battery_level(uint8_t battery_level) {
+     ble_svc_battery_state_update(&battery_level, NULL);
+ }
+diff --git a/targets/furi_hal_include/furi_hal_bt.h b/targets/furi_hal_include/furi_hal_bt.h
+index 1711f70..f47ed8a 100644
+--- a/targets/furi_hal_include/furi_hal_bt.h
++++ b/targets/furi_hal_include/furi_hal_bt.h
+@@ -137,6 +137,42 @@ void furi_hal_bt_start_advertising(void);
+  */
+ void furi_hal_bt_stop_advertising(void);
+ 
++/** Start LE scan, reports arrive as HCI LE advertising report events
++ * @note Requires full BLE stack. Register a handler with
++ *       ble_event_dispatcher_register_svc_handler to receive reports
++ *
++ * @param      interval  scan interval, 0.625ms units (4..16384)
++ * @param      window    scan window, 0.625ms units, <= interval
++ * @param      active    send scan requests, peers answer with scan response data
++ *
++ * @return     0 on success, BLE status code otherwise
++ */
++uint8_t furi_hal_bt_start_scan(uint16_t interval, uint16_t window, bool active);
++
++/** Stop LE scan
++ */
++void furi_hal_bt_stop_scan(void);
++
++/** Send raw HCI/ACI command and wait for command status or complete
++ * @note Events it triggers arrive via ble_event_dispatcher handlers.
++ *       Central role is available on full stack only
++ *
++ * @param      opcode      ogf << 10 | ocf, ACI vendor commands use ogf 0x3F
++ * @param      params      command parameters
++ * @param      params_len  parameters length
++ * @param      resp        return parameters buffer, first byte is status. NULL
++ *                         for commands answered with command status
++ * @param      resp_len    resp buffer length
++ *
++ * @return     0 on success, BLE status code otherwise
++ */
++uint8_t furi_hal_bt_hci_command(
++    uint16_t opcode,
++    const void* params,
++    uint8_t params_len,
++    void* resp,
++    uint8_t resp_len);
++
+ /** Get BT/BLE system component state
+  *
+  * @param[in]  buffer  FuriString* buffer to write to

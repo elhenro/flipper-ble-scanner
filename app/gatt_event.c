@@ -1,0 +1,165 @@
+#include "gatt_i.h"
+
+#include <string.h>
+
+#define HCI_EVT_DISCONN_COMPLETE 0x05
+#define HCI_EVT_LE_META          0x3E
+#define HCI_EVT_VENDOR           0xFF
+
+#define LE_CONN_COMPLETE      0x01
+#define LE_CONN_UPDATE        0x03
+#define LE_DATA_LEN_CHANGE    0x07
+#define LE_ENH_CONN_COMPLETE  0x0A
+#define LE_PHY_UPDATE         0x0C
+#define LE_ROLE_CENTRAL       0x00
+
+#define ACI_READ_BY_TYPE_RESP       0x0C06
+#define ACI_READ_RESP               0x0C07
+#define ACI_READ_BY_GROUP_TYPE_RESP 0x0C0A
+#define ACI_NOTIFICATION            0x0C0F
+#define ACI_PROC_COMPLETE           0x0C10
+#define ACI_ERROR_RESP              0x0C11
+#define ATT_ERR_ATTR_NOT_FOUND      0x0A
+
+static uint16_t u16(const uint8_t* p) {
+    return p[0] | (p[1] << 8);
+}
+
+static void ble_gatt_copy_uuid(uint8_t* dst, uint8_t* dst_len, const uint8_t* src, uint8_t len) {
+    *dst_len = (len == 2 || len == 16) ? len : 0;
+    memcpy(dst, src, *dst_len);
+}
+
+// d: status, handle, role, ... (same prefix for legacy and enhanced variant)
+static BleEventAckStatus ble_gatt_on_le_meta(BleGatt* gatt, const uint8_t* d, uint8_t len) {
+    uint8_t subevent = d[0];
+    d++;
+    if(subevent == LE_CONN_COMPLETE || subevent == LE_ENH_CONN_COMPLETE) {
+        if(len < 4) return BleEventNotAck;
+        // failures only come from our create connection (flipper never uses directed adv).
+        // gap.c ignores status and would take them for a phone connection, claim them all
+        if(d[0] != 0) {
+            if(gatt->info.state == BleGattStateConnecting) {
+                gatt->info.state = BleGattStateFailed;
+                gatt->info.error = d[0];
+            }
+            return BleEventAckFlowEnable;
+        }
+        // peripheral links belong to the phone/bt service
+        if(d[3] != LE_ROLE_CENTRAL) return BleEventNotAck;
+        gatt->conn_handle = u16(&d[1]);
+        gatt->info.state = BleGattStateReady;
+        gatt->info.error = 0;
+        return BleEventAckFlowEnable;
+    }
+    // link maintenance events of our connection, keep them away from gap.c
+    uint16_t handle = BLE_GATT_NO_HANDLE;
+    if(subevent == LE_DATA_LEN_CHANGE && len >= 3) handle = u16(&d[0]);
+    if((subevent == LE_CONN_UPDATE || subevent == LE_PHY_UPDATE) && len >= 4) handle = u16(&d[1]);
+    return (handle != BLE_GATT_NO_HANDLE && handle == gatt->conn_handle) ? BleEventAckFlowEnable :
+                                                                            BleEventNotAck;
+}
+
+static void ble_gatt_on_services(BleGattInfo* info, const uint8_t* d, uint8_t len) {
+    uint8_t entry_len = d[2];
+    uint8_t data_len = MIN(d[3], len - 4);
+    if(entry_len < 6) return;
+    for(uint8_t i = 0; i + entry_len <= data_len; i += entry_len) {
+        if(info->service_count >= BLE_GATT_MAX_SERVICES) break;
+        const uint8_t* e = &d[4 + i];
+        BleGattService* s = &info->services[info->service_count++];
+        s->start = u16(&e[0]);
+        s->end = u16(&e[2]);
+        ble_gatt_copy_uuid(s->uuid, &s->uuid_len, &e[4], entry_len - 4);
+    }
+}
+
+// entry: declaration handle, properties, value handle, uuid
+static void ble_gatt_on_chars(BleGattInfo* info, const uint8_t* d, uint8_t len) {
+    uint8_t entry_len = d[2];
+    uint8_t data_len = MIN(d[3], len - 4);
+    if(entry_len < 7) return;
+    for(uint8_t i = 0; i + entry_len <= data_len; i += entry_len) {
+        if(info->char_count >= BLE_GATT_MAX_CHARS) break;
+        const uint8_t* e = &d[4 + i];
+        BleGattChar* c = &info->chars[info->char_count++];
+        c->props = e[2];
+        c->value_handle = u16(&e[3]);
+        ble_gatt_copy_uuid(c->uuid, &c->uuid_len, &e[5], entry_len - 5);
+    }
+}
+
+static void ble_gatt_set_value(BleGattInfo* info, const uint8_t* value, uint8_t len) {
+    info->value_len = MIN(len, BLE_GATT_VALUE_LEN);
+    memcpy(info->value, value, info->value_len);
+    info->value_updates++;
+}
+
+// d: ecode, then connection handle first for all att/gatt client events
+static BleEventAckStatus ble_gatt_on_vendor(BleGatt* gatt, const uint8_t* d, uint8_t len) {
+    if(len < 4 || gatt->conn_handle == BLE_GATT_NO_HANDLE) return BleEventNotAck;
+    uint16_t ecode = u16(d);
+    d += 2;
+    len -= 2;
+    if(u16(d) != gatt->conn_handle) return BleEventNotAck;
+
+    BleGattInfo* info = &gatt->info;
+    switch(ecode) {
+    case ACI_READ_BY_GROUP_TYPE_RESP:
+        if(len >= 4) ble_gatt_on_services(info, d, len);
+        break;
+    case ACI_READ_BY_TYPE_RESP:
+        if(len >= 4) ble_gatt_on_chars(info, d, len);
+        break;
+    case ACI_READ_RESP:
+        if(len >= 3) ble_gatt_set_value(info, &d[3], MIN(d[2], len - 3));
+        break;
+    case ACI_NOTIFICATION:
+        if(len >= 5 && u16(&d[2]) == info->value_handle) {
+            ble_gatt_set_value(info, &d[5], MIN(d[4], len - 5));
+        }
+        break;
+    case ACI_PROC_COMPLETE:
+        if(info->state == BleGattStateBusy) info->state = BleGattStateReady;
+        if(len >= 3 && d[2]) info->error = d[2];
+        break;
+    case ACI_ERROR_RESP:
+        // attribute not found just ends a discovery
+        if(len >= 6 && d[5] != ATT_ERR_ATTR_NOT_FOUND) info->error = d[5];
+        break;
+    default:
+        break;
+    }
+    return BleEventAckFlowEnable;
+}
+
+BleEventAckStatus ble_gatt_event_handler(void* event, void* context) {
+    BleGatt* gatt = context;
+    // hci_uart_pckt: type, evt code, param len, params
+    const uint8_t* pckt = event;
+    const uint8_t* d = &pckt[3];
+    uint8_t len = pckt[2];
+    BleEventAckStatus status = BleEventNotAck;
+
+    // must not drop own events (gap.c would mistake them for the phone link). app never
+    // holds the lock across an hci command, so waiting here cannot deadlock
+    furi_check(furi_mutex_acquire(gatt->mutex, FuriWaitForever) == FuriStatusOk);
+    if(pckt[1] == HCI_EVT_DISCONN_COMPLETE) {
+        if(len >= 4 && gatt->conn_handle != BLE_GATT_NO_HANDLE && u16(&d[1]) == gatt->conn_handle) {
+            gatt->conn_handle = BLE_GATT_NO_HANDLE;
+            // idle = we hung up ourselves, anything else is a lost link
+            if(gatt->info.state != BleGattStateIdle) {
+                gatt->info.state = BleGattStateFailed;
+                gatt->info.error = d[3];
+            }
+            gatt->info.notifying = false;
+            status = BleEventAckFlowEnable;
+        }
+    } else if(pckt[1] == HCI_EVT_LE_META && len >= 1) {
+        status = ble_gatt_on_le_meta(gatt, d, len - 1);
+    } else if(pckt[1] == HCI_EVT_VENDOR) {
+        status = ble_gatt_on_vendor(gatt, d, len);
+    }
+    furi_mutex_release(gatt->mutex);
+    return status;
+}
