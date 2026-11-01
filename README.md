@@ -14,8 +14,8 @@ of them are AirPods, and lets you explore the internals of the ones that allow a
 | nearby devices, strongest first | details, connect with OK | built-in help |
 | ![gatt services](docs/services.png) | ![characteristics](docs/chars.png) | ![value view](docs/value.png) |
 | services of a connected device | characteristics with R/W/N/I properties | read values and toggle notifications |
-| ![vendor data](docs/vendor.png) | | |
-| raw manufacturer / service data (Up/Down) | | |
+| ![vendor data](docs/vendor.png) | ![value editor](docs/edit.png) | ![pair prompt](docs/pair.png) |
+| raw manufacturer / service data (Up/Down) | hold OK: hex editor for a writable value | numeric comparison, OK to confirm |
 
 *Screenshots are rendered from the app's own drawing code, using the Flipper's own fonts.
 The devices are made up. No toasters were harmed.*
@@ -30,8 +30,13 @@ The devices are made up. No toasters were harmed.*
 - **Show vendor data**: Up/Down in the details screen dumps the device's raw manufacturer data, service
   data and advertised 16-bit service UUIDs
 - **Connect** to connectable devices (marked `C`) and browse their GATT database: services,
-  characteristics with their human names, read values, and subscribe to notifications **and**
-  indications (confirmed on the app thread, they block the server otherwise)
+  characteristics with their human names, read values (long values continue with read blob),
+  and subscribe to notifications **and** indications (confirmed on the app thread, they block the
+  server otherwise)
+- **Write** to writable characteristics: hold OK on a value to open a hex editor (Up/Down nibble,
+  Left/Right cursor, OK sends), with response when the char has one, without otherwise
+- **Pair** when a characteristic needs an encrypted link: the app starts pairing on the ATT error, shows
+  the six digits for numeric comparison (the peer shows the same ones) and waits for OK or Back
 - **Dump** a service: hold OK on its characteristics to read every readable characteristic, one at a
   time, and save them with their names to `/ext/apps_data/ble_scanner/gatt.log`
 - **Log** a snapshot every 2 s to `/ext/apps_data/ble_scanner/scan.log` while on USB power (on battery it
@@ -84,14 +89,16 @@ install the firmware with `flash-dfu` instead. Every later firmware change can g
 
 | Screen | Keys |
 |---|---|
-| **List** | Up/Down select, OK details, Left for info screen (4 pages), Back exit |
-| **Details** | OK connect (only devices marked `C`), Up/Down summary / vendor data, Back to the list |
-| **Services** | Up/Down select, OK for characteristics, Back to disconnect |
+| **List** | Up/Down select, OK details, Back exit |
+| **Details** | OK connect (when the device says it is connectable), Up/Down summary / vendor data, Back to the list |
+| **Services** | Up/Down select, OK for characteristics, OK retry after an error, Back to disconnect |
 | **Characteristics** | Up/Down select, OK to open value, hold OK to dump the service to `gatt.log`, Back to go up one level |
-| **Value** | OK to read, Right to toggle notifications/indications (offered once its CCCD is found), Back to go up one level |
+| **Value** | OK to read (again for the rest of a long value), Right to toggle notifications/indications (offered once its CCCD is found), hold OK on a writable char for the hex editor, Back to go up one level |
+| **Editor** | Up/Down to change the nibble under the cursor, Left/Right to move it, OK to write, Back to drop the edit |
+| **Any** | Left for the info pages (6), Back there returns to the screen you left. While a dump runs the characteristics screen keeps Left for itself, Back cancels the dump. The hex editor keeps every key, Left included |
 
-Flags: `C` connectable, `R` answered an active scan request (in the log), properties `R`ead `W`rite
-`N`otify `I`ndicate.
+Flags: the details screen says `connectable` or `scan only`; characteristic rows show properties
+`R`ead `W`rite `N`otify `I`ndicate.
 
 ## Nerd corner
 
@@ -110,8 +117,15 @@ Flags: `C` connectable, `R` answered an active scan request (in the log), proper
   main loop, since the BLE event thread cannot wait for an HCI command event.
 - **Errors**: ATT errors and disconnect reasons are printed with their spec names (`need pair`,
   `peer left`, ...) instead of a bare code.
+- **Pairing**: an ATT error of `need pair`/`need encrypt`/`insufficient auth` starts one pairing attempt per
+  link. SMP replies that block the peer (passkey, authorization, rebond) are sent from the main loop, and a
+  passkey request is answered with a wrong key on purpose, so a peer that wants a keypad fails fast instead
+  of timing out after 30 s.
 - **Screenshots**: `tools/screenshots/render.sh` compiles the app's view code with Momentum's u8g2 and fonts
   on your computer and writes `docs/*.png`.
+- **Host tests**: `tools/test.sh` builds the app's non-radio logic against the mocks in
+  `tools/screenshots/mock` and runs it: advertising decode, input handling (screen flow, hex editor),
+  GATT events (read, read blob, write completion, pairing, disconnect).
 - **Adv parsing check**: `tools/adv_test.c` is a host-side assert test for the advertisement parser and
   vendor labels, see the compile line in its header.
 

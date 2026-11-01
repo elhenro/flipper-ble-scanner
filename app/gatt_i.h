@@ -19,7 +19,11 @@ struct BleGatt {
     uint16_t descs_end; // descriptor search stops before the next declaration
     uint16_t desc_handle; // 0x2901 of the selected characteristic, 0 = none
     bool reading_desc; // next read response is the descriptor name, not the value
+    bool reading_long; // read blob responses append to the value
     bool confirm_pending; // indication seen, its confirmation waits for the app thread
+    bool passkey_pending; // peer wants a passkey we cannot enter, answer 0 from the tick
+    bool authorize_pending; // peer asks for authorization, tick allows it
+    bool rebond_pending; // peer lost its keys, tick allows a rebond
     BleGattInfo info;
 };
 

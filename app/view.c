@@ -54,14 +54,16 @@ static void ble_view_draw_unsupported(Canvas* canvas) {
 static void ble_view_draw_list(Canvas* canvas, const BleViewModel* model) {
     char line[32];
     if(model->scanning) {
-        snprintf(line, sizeof(line), "SCAN %u  dBm", model->count);
+        snprintf(line, sizeof(line), "SCAN %u", model->count);
     } else {
         snprintf(line, sizeof(line), "Scan failed: 0x%02X", model->scan_status);
     }
     ble_view_header(canvas, line, "<info");
 
     if(model->count == 0) {
-        canvas_draw_str_aligned(canvas, 64, 36, AlignCenter, AlignCenter, "Listening...");
+        // the main loop retries a failed scan every tick
+        canvas_draw_str_aligned(
+            canvas, 64, 36, AlignCenter, AlignCenter, model->scanning ? "Listening..." : "Retrying scan...");
         return;
     }
 
@@ -90,7 +92,6 @@ static void ble_view_draw_detail(Canvas* canvas, const BleViewModel* model) {
     ble_view_format_addr(line, dev->addr);
     canvas_draw_str(canvas, 0, 21, line);
     canvas_draw_str(canvas, 104, 21, dev->addr_type ? "rand" : "pub");
-    if(dev->connectable) canvas_draw_str(canvas, 123, 21, "C");
 
     const char* vendor = ble_vendor_label(dev);
     if(dev->company != BLE_SCAN_NO_COMPANY) {
@@ -109,8 +110,9 @@ static void ble_view_draw_detail(Canvas* canvas, const BleViewModel* model) {
         dev->seen_count,
         dev->connectable ? "connectable" : "scan only");
     canvas_draw_str(canvas, 0, 51, line);
-    canvas_draw_str(
-        canvas, 0, 62, dev->connectable ? "OK connect  Up/Dn page" : "Up/Dn page  scan only");
+    // the page switch needs a key hint, not just the "1/2" counter
+    if(dev->connectable) canvas_draw_str(canvas, 0, 62, "OK connect");
+    canvas_draw_str_aligned(canvas, 127, 62, AlignRight, AlignBottom, "Up/Dn 1/2");
 }
 
 // "mf 4C 00 19" style dump, "-" when empty. buf 40 is enough
@@ -140,6 +142,7 @@ static void ble_view_draw_vendor(Canvas* canvas, const BleViewModel* model) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 0, 10, "Vendor data");
     canvas_set_font(canvas, FontSecondary);
+    canvas_draw_str_aligned(canvas, 127, 10, AlignRight, AlignBottom, "Up/Dn 2/2");
 
     if(dev->company != BLE_SCAN_NO_COMPANY) {
         const char* name = ble_vendor_company_name(dev->company);

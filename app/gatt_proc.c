@@ -5,8 +5,13 @@
 #define OP_DISC_ALL_CHARS    0xFD15
 #define OP_DISC_ALL_DESCS    0xFD17
 #define OP_READ_CHAR_VALUE   0xFD18
+#define OP_READ_LONG_VALUE   0xFD1A
+#define OP_WRITE_CHAR_VALUE  0xFD1B
+#define OP_WRITE_NO_RESP     0xFD23
 #define OP_WRITE_CHAR_DESC   0xFD21
 #define OP_READ_CHAR_DESC    0xFD22
+#define OP_SEND_PAIRING_REQ  0xFC9F
+#define OP_CONFIRM_YESNO     0xFCA5
 
 bool ble_gatt_discover_services(BleGatt* gatt) {
     uint8_t p[2];
@@ -14,7 +19,14 @@ bool ble_gatt_discover_services(BleGatt* gatt) {
     gatt->info.service_count = 0;
     gatt->info.services_done = true;
     ble_gatt_put16(p, gatt->conn_handle);
-    return ble_gatt_command(gatt, BleGattStateBusy, OP_DISC_ALL_SERVICES, p, 2);
+    bool ok = ble_gatt_command(gatt, BleGattStateBusy, OP_DISC_ALL_SERVICES, p, 2);
+    if(!ok) {
+        // refused, no procedure will run: let the next tick try again
+        ble_gatt_lock(gatt);
+        gatt->info.services_done = false;
+        ble_gatt_unlock(gatt);
+    }
+    return ok;
 }
 
 bool ble_gatt_discover_chars(BleGatt* gatt, uint8_t service_index) {
@@ -44,8 +56,12 @@ void ble_gatt_select(BleGatt* gatt, uint8_t char_index) {
         info->notifying = false;
         info->desc[0] = '\0';
         info->desc_done = false;
+        info->truncated = false;
+        info->long_done = false;
+        info->write_done = false;
         gatt->desc_handle = 0;
         gatt->reading_desc = false;
+        gatt->reading_long = false;
     }
     ble_gatt_unlock(gatt);
 }
@@ -53,9 +69,89 @@ void ble_gatt_select(BleGatt* gatt, uint8_t char_index) {
 bool ble_gatt_read(BleGatt* gatt) {
     uint8_t p[4];
     ble_gatt_lock(gatt);
+    BleGattInfo* info = &gatt->info;
+    // a fresh read starts over: no leftover tail, no stale write result
+    info->truncated = false;
+    info->long_done = false;
+    info->write_done = false;
+    info->resume_read = false;
+    gatt->reading_long = false;
     ble_gatt_put16(&p[0], gatt->conn_handle);
-    ble_gatt_put16(&p[2], gatt->info.value_handle);
+    ble_gatt_put16(&p[2], info->value_handle);
     return ble_gatt_command(gatt, BleGattStateBusy, OP_READ_CHAR_VALUE, p, 4);
+}
+
+bool ble_gatt_read_long(BleGatt* gatt) {
+    uint8_t p[6];
+    ble_gatt_lock(gatt);
+    BleGattInfo* info = &gatt->info;
+    // one attempt per value: a short value would answer invalid offset
+    info->truncated = false;
+    info->long_done = true;
+    gatt->reading_long = true;
+    ble_gatt_put16(&p[0], gatt->conn_handle);
+    ble_gatt_put16(&p[2], info->value_handle);
+    ble_gatt_put16(&p[4], info->value_len); // read blob continues where the read stopped
+    bool ok = ble_gatt_command(gatt, BleGattStateBusy, OP_READ_LONG_VALUE, p, 6);
+    if(!ok) {
+        ble_gatt_lock(gatt);
+        gatt->reading_long = false;
+        ble_gatt_unlock(gatt);
+    }
+    return ok;
+}
+
+bool ble_gatt_write(BleGatt* gatt, const uint8_t* data, uint8_t len) {
+    uint8_t p[5 + BLE_GATT_VALUE_LEN];
+    ble_gatt_lock(gatt);
+    BleGattInfo* info = &gatt->info;
+    if(gatt->value_char >= info->char_count || len > BLE_GATT_VALUE_LEN) {
+        ble_gatt_unlock(gatt);
+        return false;
+    }
+    // without response when that is all the char offers: no procedure, no error
+    bool with_resp = info->chars[gatt->value_char].props & BLE_GATT_PROP_WRITE;
+    ble_gatt_put16(&p[0], gatt->conn_handle);
+    ble_gatt_put16(&p[2], info->value_handle);
+    p[4] = len;
+    memcpy(&p[5], data, len);
+    info->write_done = false;
+    info->write_len = len;
+    info->write_pending = with_resp;
+    bool ok = ble_gatt_command(
+        gatt, with_resp ? BleGattStateBusy : BleGattStateReady, with_resp ? OP_WRITE_CHAR_VALUE : OP_WRITE_NO_RESP, p, 5 + len);
+    if(!ok) {
+        ble_gatt_lock(gatt);
+        info->write_pending = false;
+        ble_gatt_unlock(gatt);
+    } else if(!with_resp) {
+        // nothing will report back, the write left with the command
+        ble_gatt_lock(gatt);
+        info->write_done = true;
+        ble_gatt_unlock(gatt);
+    }
+    return ok;
+}
+
+bool ble_gatt_pair(BleGatt* gatt) {
+    uint8_t p[3];
+    ble_gatt_lock(gatt);
+    BleGattInfo* info = &gatt->info;
+    info->pair_state = 1;
+    info->pair_reason = 0;
+    info->pair_confirm = false;
+    ble_gatt_put16(&p[0], gatt->conn_handle);
+    p[2] = 0; // reuse stored keys, rebond only when the peer insists
+    return ble_gatt_command(gatt, BleGattStateReady, OP_SEND_PAIRING_REQ, p, 3);
+}
+
+bool ble_gatt_pair_confirm(BleGatt* gatt, bool yes) {
+    uint8_t p[3];
+    ble_gatt_lock(gatt);
+    gatt->info.pair_confirm = false;
+    ble_gatt_put16(&p[0], gatt->conn_handle);
+    p[2] = yes ? 1 : 0;
+    return ble_gatt_command(gatt, BleGattStateReady, OP_CONFIRM_YESNO, p, 3);
 }
 
 bool ble_gatt_discover_descs(BleGatt* gatt) {
@@ -76,7 +172,14 @@ bool ble_gatt_discover_descs(BleGatt* gatt) {
     ble_gatt_put16(&p[0], gatt->conn_handle);
     ble_gatt_put16(&p[2], start);
     ble_gatt_put16(&p[4], end);
-    return ble_gatt_command(gatt, BleGattStateBusy, OP_DISC_ALL_DESCS, p, 6);
+    bool ok = ble_gatt_command(gatt, BleGattStateBusy, OP_DISC_ALL_DESCS, p, 6);
+    if(!ok) {
+        // refused, no procedure will run: let the next tick try again
+        ble_gatt_lock(gatt);
+        info->descs_done = false;
+        ble_gatt_unlock(gatt);
+    }
+    return ok;
 }
 
 bool ble_gatt_read_desc(BleGatt* gatt) {
@@ -98,6 +201,7 @@ bool ble_gatt_read_desc(BleGatt* gatt) {
         // no response will come, don't let it eat the next one
         ble_gatt_lock(gatt);
         gatt->reading_desc = false;
+        info->desc_done = false;
         ble_gatt_unlock(gatt);
     }
     return ok;

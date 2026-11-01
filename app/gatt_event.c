@@ -16,11 +16,18 @@
 #define ACI_FIND_INFO_RESP          0x0C04
 #define ACI_READ_BY_TYPE_RESP       0x0C06
 #define ACI_READ_RESP               0x0C07
+#define ACI_READ_BLOB_RESP          0x0C08
 #define ACI_READ_BY_GROUP_TYPE_RESP 0x0C0A
 #define ACI_INDICATION              0x0C0E
 #define ACI_NOTIFICATION            0x0C0F
 #define ACI_PROC_COMPLETE           0x0C10
 #define ACI_ERROR_RESP              0x0C11
+#define ACI_PAIRING_COMPLETE        0x0401
+#define ACI_PASS_KEY_REQ            0x0402
+#define ACI_AUTHORIZATION_REQ       0x0403
+#define ACI_BOND_LOST               0x0405
+#define ACI_NUMERIC_COMPARISON      0x0409
+#define ATT_ERR_INVALID_OFFSET      0x07
 #define ATT_ERR_ATTR_NOT_FOUND      0x0A
 #define FIND_INFO_FORMAT_UUID16     0x01
 #define UUID_CHAR_DECLARATION       0x2803
@@ -119,6 +126,17 @@ static void ble_gatt_set_value(BleGattInfo* info, const uint8_t* value, uint8_t 
     info->value_len = MIN(len, BLE_GATT_VALUE_LEN);
     memcpy(info->value, value, info->value_len);
     info->value_updates++;
+    // a read that fills the chunk may have stopped at the mtu, read long gets the rest
+    info->truncated = len >= BLE_GATT_READ_CHUNK;
+}
+
+// read blob responses of a read long continue where the plain read stopped
+static void ble_gatt_append_value(BleGattInfo* info, const uint8_t* value, uint8_t len) {
+    uint8_t room = BLE_GATT_VALUE_LEN - info->value_len;
+    uint8_t n = MIN(len, room);
+    memcpy(&info->value[info->value_len], value, n);
+    info->value_len += n;
+    info->value_updates++;
 }
 
 // the read that just landed was 0x2A00: keep it as the device's real name
@@ -177,12 +195,18 @@ static BleEventAckStatus ble_gatt_on_vendor(BleGatt* gatt, const uint8_t* d, uin
             ble_gatt_remember_name(info);
         }
         break;
+    case ACI_READ_BLOB_RESP:
+        // same payload as a read, only the meaning depends on the procedure
+        if(gatt->reading_long && len >= 3) {
+            ble_gatt_append_value(info, &d[3], MIN(d[2], len - 3));
+        }
+        break;
     case ACI_INDICATION:
         if(len >= 5 && u16(&d[2]) == info->value_handle) {
             ble_gatt_set_value(info, &d[5], MIN(d[4], len - 5));
+            // confirmation goes out on the app thread, see ble_gatt_tick
+            gatt->confirm_pending = true;
         }
-        // confirmation goes out on the app thread, see ble_gatt_tick
-        gatt->confirm_pending = true;
         break;
     case ACI_NOTIFICATION:
         if(len >= 5 && u16(&d[2]) == info->value_handle) {
@@ -197,6 +221,14 @@ static BleEventAckStatus ble_gatt_on_vendor(BleGatt* gatt, const uint8_t* d, uin
             gatt->reading_desc = false;
             info->desc_done = true;
         }
+        // the procedure behind a read long or a write is done, either way
+        gatt->reading_long = false;
+        info->long_done = info->long_done || info->truncated;
+        info->truncated = false;
+        if(info->write_pending) {
+            info->write_pending = false;
+            info->write_done = true;
+        }
         break;
     case ACI_ERROR_RESP:
         // attribute not found just ends a discovery
@@ -205,6 +237,49 @@ static BleEventAckStatus ble_gatt_on_vendor(BleGatt* gatt, const uint8_t* d, uin
             gatt->reading_desc = false;
             info->desc_done = true;
         }
+        if(gatt->reading_long) {
+            // invalid offset: the value ended exactly at the read chunk, not an error
+            if(len >= 6 && d[5] == ATT_ERR_INVALID_OFFSET) info->error = 0;
+            gatt->reading_long = false;
+            info->long_done = true;
+            info->truncated = false;
+        }
+        if(info->write_pending) {
+            info->write_pending = false;
+            info->write_done = true;
+        }
+        break;
+    case ACI_PAIRING_COMPLETE:
+        if(len >= 4) {
+            info->pair_confirm = false;
+            info->pair_state = d[2] ? 3 : 2;
+            info->pair_reason = d[2] ? d[3] : 0;
+            if(!d[2]) {
+                // the error that started the pairing is history, redo the read it blocked
+                info->error = 0;
+                info->resume_read = true;
+            }
+        }
+        break;
+    case ACI_NUMERIC_COMPARISON:
+        // the peer shows the same six digits, we show them and wait for OK
+        if(len >= 6) {
+            info->pair_numeric = d[2] | (d[3] << 8) | (d[4] << 16) | ((uint32_t)d[5] << 24);
+            info->pair_state = 1;
+            info->pair_confirm = true;
+        }
+        break;
+    case ACI_PASS_KEY_REQ:
+        // no keypad: a wrong key fails the pairing at once instead of a 30s timeout
+        info->pair_state = 3;
+        info->pair_reason = BLE_GATT_ERR_PASSKEY;
+        gatt->passkey_pending = true;
+        break;
+    case ACI_AUTHORIZATION_REQ:
+        gatt->authorize_pending = true;
+        break;
+    case ACI_BOND_LOST:
+        gatt->rebond_pending = true;
         break;
     default:
         break;

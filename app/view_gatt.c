@@ -58,6 +58,11 @@ static const char* ble_view_link_error(uint8_t code) {
 
 // state line shared by all gatt screens, NULL when nothing to report
 static const char* ble_view_gatt_status(const BleGattInfo* gatt, char* buf, size_t size) {
+    // the prompt wins over everything: pairing blocks the link until it is answered
+    if(gatt->pair_confirm) {
+        snprintf(buf, size, "Pair %06lu?", (unsigned long)gatt->pair_numeric);
+        return buf;
+    }
     switch(gatt->state) {
     case BleGattStateConnecting:
         return "Connecting...";
@@ -78,6 +83,12 @@ static const char* ble_view_gatt_status(const BleGattInfo* gatt, char* buf, size
             else snprintf(buf, size, "Error 0x%02X", gatt->error);
             return buf;
         }
+        // stays for the rest of the link: the peer either keeps its keys or doesn't
+        if(gatt->pair_state == 2) return "Paired";
+        if(gatt->pair_state == 3) {
+            snprintf(buf, size, "Pair fail 0x%02X", gatt->pair_reason);
+            return buf;
+        }
         return NULL;
     }
 }
@@ -96,11 +107,39 @@ static void ble_view_props(char* buf, uint8_t props) {
     buf[4] = '\0';
 }
 
+// one line of body text for a screen with no rows to show
+static void ble_view_empty(Canvas* canvas, const char* text) {
+    canvas_draw_str_aligned(canvas, 64, 36, AlignCenter, AlignCenter, text);
+}
+
 static void ble_view_draw_services(Canvas* canvas, const BleViewModel* model) {
     const BleGattInfo* gatt = &model->gatt;
     char title[24];
     ble_vendor_display_name(title, sizeof(title), &model->peer);
     ble_view_gatt_header(canvas, title, gatt);
+    if(gatt->service_count == 0) {
+        const char* msg;
+        switch(gatt->state) {
+        case BleGattStateConnecting:
+            msg = "Back cancels";
+            break;
+        case BleGattStateBusy:
+            msg = "Discovering...";
+            break;
+        case BleGattStateFailed:
+            msg = "OK retry  Back up";
+            break;
+        case BleGattStateIdle:
+            msg = "Disconnected";
+            break;
+        default:
+            msg = gatt->error ? "OK retry  Back up" :
+                  gatt->services_done ? "No services  Back up" :
+                                        "Discovering...";
+            break;
+        }
+        ble_view_empty(canvas, msg);
+    }
     for(size_t row = 0; row < BLE_VIEW_ROWS; row++) {
         size_t i = model->service_scroll + row;
         if(i >= gatt->service_count) break;
@@ -128,6 +167,29 @@ static void ble_view_draw_chars(Canvas* canvas, const BleViewModel* model) {
         snprintf(title, sizeof(title), "Dump failed");
     }
     ble_view_gatt_header(canvas, title, gatt);
+    if(gatt->char_count == 0) {
+        const char* msg;
+        switch(gatt->state) {
+        case BleGattStateConnecting:
+            msg = "Connecting...";
+            break;
+        case BleGattStateBusy:
+            msg = "Discovering...";
+            break;
+        case BleGattStateFailed:
+            msg = "OK retry  Back up";
+            break;
+        case BleGattStateIdle:
+            msg = "Disconnected";
+            break;
+        default:
+            msg = gatt->error ? "OK retry  Back up" :
+                  gatt->service_count ? "OK rescan  Back up" :
+                                        "Back up";
+            break;
+        }
+        ble_view_empty(canvas, msg);
+    }
     for(size_t row = 0; row < BLE_VIEW_ROWS; row++) {
         size_t i = model->char_scroll + row;
         if(i >= gatt->char_count) break;
@@ -151,6 +213,25 @@ static void ble_view_draw_value(Canvas* canvas, const BleViewModel* model) {
     // the 0x2901 name says more than a vendor uuid, when the device has one
     ble_view_gatt_header(canvas, gatt->desc[0] ? gatt->desc : line, gatt);
 
+    if(model->editing) {
+        // 8 bytes per row, 16 px apart: 6 px font leaves no room for closer
+        for(uint8_t i = 0; i < model->edit_len; i++) {
+            char hex[3];
+            snprintf(hex, sizeof(hex), "%02X", model->edit_buf[i]);
+            int32_t x = (i % 8) * 16;
+            int32_t y = 20 + (i / 8) * 9;
+            canvas_draw_str(canvas, x, y, hex);
+            if(i == model->edit_pos / 2) {
+                // underline the nibble being changed
+                int32_t nx = x + (model->edit_pos % 2 ? 6 : 0);
+                canvas_draw_line(canvas, nx, y + 2, nx + 5, y + 2);
+            }
+        }
+        canvas_draw_str(canvas, 0, 54, "Up/Dn nibble  Back esc");
+        canvas_draw_str_aligned(canvas, 127, 62, AlignRight, AlignBottom, "OK send");
+        return;
+    }
+
     // 8 bytes per hex line, 3 lines, then printable ascii of the same bytes
     for(uint8_t l = 0; l < 3 && l * 8 < gatt->value_len; l++) {
         size_t pos = 0;
@@ -167,12 +248,38 @@ static void ble_view_draw_value(Canvas* canvas, const BleViewModel* model) {
     line[n] = '\0';
     if(gatt->value_len) canvas_draw_str(canvas, 0, 48, line);
 
+    uint8_t props_bits = has_chr ? gatt->chars[sel].props : 0;
+    if(!has_chr) {
+        ble_view_empty(canvas, "No characteristic");
+    } else if(gatt->value_len == 0) {
+        if(!(props_bits & BLE_GATT_PROP_READ)) {
+            ble_view_empty(canvas, "not readable");
+        } else if(gatt->state == BleGattStateBusy) {
+            ble_view_empty(canvas, "Reading...");
+        } else if(gatt->state == BleGattStateFailed || gatt->error) {
+            ble_view_empty(canvas, "read failed");
+        } else {
+            ble_view_empty(canvas, "empty value");
+        }
+    }
+
     char props[5];
-    ble_view_props(props, has_chr ? gatt->chars[sel].props : 0);
+    ble_view_props(props, props_bits);
     snprintf(line, sizeof(line), "%s %ub #%lu", props, gatt->value_len, gatt->value_updates);
     canvas_draw_str(canvas, 0, 62, line);
     // notify needs the cccd, found by a descriptor search once the screen opens
-    const char* keys = gatt->notifying ? "> stop ntf" : gatt->cccd ? "OK rd >ntf" : "OK read";
+    bool can_notify = props_bits & (BLE_GATT_PROP_NOTIFY | BLE_GATT_PROP_INDICATE);
+    bool can_write = props_bits & (BLE_GATT_PROP_WRITE | BLE_GATT_PROP_WRITE_NR);
+    const char* keys;
+    if(gatt->pair_confirm) keys = "OK yes Back no";
+    else if(gatt->truncated && !gatt->long_done) keys = "OK rest";
+    else if(gatt->write_done) keys = "sent";
+    else if(gatt->notifying) keys = "> stop ntf";
+    else if(gatt->cccd && can_notify) keys = (props_bits & BLE_GATT_PROP_READ) ? "OK rd >ntf" : "> ntf";
+    else if(can_notify && !(gatt->descs_done && gatt->desc_done)) keys = "find cccd";
+    else if(can_notify) keys = (props_bits & BLE_GATT_PROP_READ) ? "OK read" : "no cccd";
+    else if(can_write) keys = "hold OK write";
+    else keys = (props_bits & BLE_GATT_PROP_READ) ? "OK read" : "no read";
     canvas_draw_str_aligned(canvas, 127, 62, AlignRight, AlignBottom, keys);
 }
 

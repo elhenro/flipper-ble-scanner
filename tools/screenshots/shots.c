@@ -99,5 +99,26 @@ int main(int argc, char** argv) {
     strcpy(m.gatt.desc, "Model Number");
     m.screen = BleScreenValue;
     shot(canvas, &m, argv[1], "value");
+
+    // long value: the read stopped at the chunk, OK fetches the rest
+    m.gatt.value_len = 20;
+    m.gatt.truncated = true;
+    shot(canvas, &m, argv[1], "rest");
+
+    // editor on a writable char, cursor on the second nibble of byte 1
+    m.gatt.chars[1].props = BLE_GATT_PROP_READ | BLE_GATT_PROP_WRITE;
+    m.gatt.value_len = 6;
+    m.gatt.truncated = false;
+    m.editing = true;
+    m.edit_len = 6;
+    m.edit_pos = 3;
+    memcpy(m.edit_buf, "AT+123", 6);
+    shot(canvas, &m, argv[1], "edit");
+    m.editing = false;
+
+    // numeric comparison prompt, the peer shows the same six digits
+    m.gatt.pair_confirm = true;
+    m.gatt.pair_numeric = 481902;
+    shot(canvas, &m, argv[1], "pair");
     return 0;
 }

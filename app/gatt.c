@@ -9,6 +9,9 @@
 #define OP_CREATE_CONNECTION   0xFC9C // aci_gap_create_connection
 #define OP_TERMINATE_GAP_PROC  0xFC9D
 #define OP_CONFIRM_INDICATION  0xFD25 // aci_gatt_confirm_indication
+#define OP_PASS_KEY_RESP       0xFC88 // aci_gap_pass_key_resp
+#define OP_AUTHORIZE           0xFC89 // aci_gap_authorization_resp
+#define OP_ALLOW_REBOND        0xFC95 // aci_gap_allow_rebond
 #define GAP_DIRECT_CONN_PROC   0x40
 #define REASON_USER_TERMINATED 0x13
 
@@ -145,6 +148,14 @@ void ble_gatt_tick(BleGatt* gatt) {
         gatt->confirm_pending = false;
         confirm = gatt->conn_handle;
     }
+    // same for the smp replies: the peer waits for them, the app thread sends them
+    uint16_t handle = gatt->conn_handle;
+    bool passkey = gatt->passkey_pending;
+    bool authorize = gatt->authorize_pending;
+    bool rebond = gatt->rebond_pending;
+    gatt->passkey_pending = false;
+    gatt->authorize_pending = false;
+    gatt->rebond_pending = false;
     ble_gatt_unlock(gatt);
     if(expired) ble_gatt_terminate_connect();
     if(abandoned) ble_gatt_hangup(gatt);
@@ -152,6 +163,18 @@ void ble_gatt_tick(BleGatt* gatt) {
         uint8_t p[2];
         ble_gatt_put16(p, confirm);
         furi_hal_bt_hci_command(OP_CONFIRM_INDICATION, p, 2, NULL, 0);
+    }
+    if(handle != BLE_GATT_NO_HANDLE) {
+        uint8_t p[6] = {0};
+        ble_gatt_put16(p, handle);
+        // no keypad on the flipper: a wrong key fails the pairing right away
+        if(passkey) furi_hal_bt_hci_command(OP_PASS_KEY_RESP, p, 6, NULL, 0);
+        // 1 = authorized
+        if(authorize) {
+            p[2] = 1;
+            furi_hal_bt_hci_command(OP_AUTHORIZE, p, 3, NULL, 0);
+        }
+        if(rebond) furi_hal_bt_hci_command(OP_ALLOW_REBOND, p, 2, NULL, 0);
     }
 }
 

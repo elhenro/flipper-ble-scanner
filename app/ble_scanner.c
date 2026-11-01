@@ -134,6 +134,7 @@ void ble_scanner_dump_start(BleScannerApp* app) {
     BleViewModel* m = &app->model;
     const BleGattInfo* gatt = &m->gatt;
     if(app->dumping || gatt->state != BleGattStateReady || !gatt->char_count) return;
+    if(m->service_sel >= gatt->service_count) return;
     uint8_t total = 0;
     for(uint8_t i = 0; i < gatt->char_count; i++) {
         if(gatt->chars[i].props & BLE_GATT_PROP_READ) total++;
@@ -195,6 +196,12 @@ static void ble_scanner_gatt_refresh(BleScannerApp* app) {
     }
     const BleGattInfo* gatt = &m->gatt;
     if(gatt->state != BleGattStateReady) return;
+    // the peer refuses the read until the link is encrypted, pair once per link
+    if(gatt->pair_state == 0 &&
+       (gatt->error == 0x05 || gatt->error == 0x08 || gatt->error == 0x0F)) {
+        ble_gatt_pair(app->gatt);
+        return;
+    }
     // discover once the link is up, then the selected char's cccd (0x2902) and name (0x2901)
     if(!gatt->services_done) {
         ble_gatt_discover_services(app->gatt);
@@ -202,6 +209,13 @@ static void ble_scanner_gatt_refresh(BleScannerApp* app) {
         ble_gatt_discover_descs(app->gatt);
     } else if(m->screen == BleScreenValue && !gatt->desc_done) {
         ble_gatt_read_desc(app->gatt);
+    } else if(m->screen == BleScreenValue && gatt->resume_read) {
+        // the read that needed pairing was refused; the link is encrypted now
+        ble_gatt_read(app->gatt);
+    } else if(m->screen == BleScreenValue && gatt->write_done && gatt->char_count) {
+        // show what the peer holds now, the read clears the flag itself
+        uint8_t sel = m->char_sel < gatt->char_count ? m->char_sel : 0;
+        if(gatt->chars[sel].props & BLE_GATT_PROP_READ) ble_gatt_read(app->gatt);
     }
 }
 
@@ -278,9 +292,15 @@ int32_t ble_scanner_main(void* p) {
         // sd write is slow, drawing must not wait for it
         if(log_due) ble_scan_log_save(app->storage, log);
         if(app->dump_pending) {
-            ble_scan_log_save_gatt(app->storage, app->dump_pending);
+            bool saved = ble_scan_log_save_gatt(app->storage, app->dump_pending);
             furi_string_free(app->dump_pending);
             app->dump_pending = NULL;
+            if(!saved) {
+                // "Dump saved" was drawn optimistically, correct it on the chars screen
+                furi_check(furi_mutex_acquire(app->model_mutex, FuriWaitForever) == FuriStatusOk);
+                if(app->model.screen == BleScreenChars) app->model.dump_state = 3;
+                furi_mutex_release(app->model_mutex);
+            }
         }
         view_port_update(app->view_port);
     }
