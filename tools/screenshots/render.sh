@@ -9,11 +9,16 @@ TMP=$(mktemp -d)
 trap 'rm -r "$TMP"' EXIT
 
 U8G2_SRC=$(ls $U8G2/*.c | grep -v u8g2_glue.c)
+# drops u8g2 pbm/xbm export and kerning, their helpers aren't vendored
+case "$(uname)" in
+  Darwin) GC=(-Wl,-dead_strip) ;;
+  *) GC=(-ffunction-sections -Wl,--gc-sections) ;;
+esac
 # shellcheck disable=SC2086
 cc -O1 -w -I tools/screenshots/mock -I app -I $U8G2 \
   tools/screenshots/shots.c tools/screenshots/canvas.c \
   app/view*.c app/vendor.c app/uuid.c $U8G2_SRC \
-  -lm -Wl,-dead_strip -o "$TMP/shots" # drops u8g2 pbm/xbm export, its helpers aren't vendored
+  -lm "${GC[@]}" -o "$TMP/shots"
 "$TMP/shots" "$TMP"
 
 mkdir -p docs

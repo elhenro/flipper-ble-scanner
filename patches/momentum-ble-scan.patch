@@ -50,10 +50,10 @@ index 38fc5e4..c6786ce 100644
          strlen(name),
          &gap->service.gap_svc_handle,
 diff --git a/targets/f7/furi_hal/furi_hal_bt.c b/targets/f7/furi_hal/furi_hal_bt.c
-index 4c619c2..b834398 100644
+index 4c619c2..c9b2b82 100644
 --- a/targets/f7/furi_hal/furi_hal_bt.c
 +++ b/targets/f7/furi_hal/furi_hal_bt.c
-@@ -267,6 +267,38 @@ void furi_hal_bt_stop_advertising(void) {
+@@ -267,6 +267,39 @@ void furi_hal_bt_stop_advertising(void) {
      }
  }
  
@@ -85,7 +85,8 @@ index 4c619c2..b834398 100644
 +        .rparam = resp_len ? resp : &status,
 +        .rlen = resp_len ? resp_len : 1,
 +    };
-+    if(hci_send_req(&rq, false) < 0) return BLE_STATUS_TIMEOUT;
++    // never fails: a missing response trips furi_check in hci_cmd_resp_wait
++    hci_send_req(&rq, false);
 +    return resp_len ? *(uint8_t*)resp : status;
 +}
 +

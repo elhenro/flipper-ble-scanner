@@ -5,6 +5,7 @@
 #define BLE_GATT_MAX_SERVICES 16
 #define BLE_GATT_MAX_CHARS    24
 #define BLE_GATT_VALUE_LEN    64
+#define BLE_GATT_NAME_LEN     20
 
 // characteristic properties (core spec vol 3 part g 3.3.1.1)
 #define BLE_GATT_PROP_READ     0x02
@@ -50,7 +51,11 @@ typedef struct {
     uint8_t value[BLE_GATT_VALUE_LEN];
     uint8_t value_len;
     uint32_t value_updates;
-    bool notifying;
+    uint16_t cccd; // its client config descriptor, 0 = none found
+    bool descs_done;
+    bool notifying; // notifications or indications enabled
+    char desc[BLE_GATT_NAME_LEN]; // 0x2901 user description of the selected char
+    bool desc_done; // search and read attempted, don't ask again
 } BleGattInfo;
 
 typedef struct BleGatt BleGatt;
@@ -60,15 +65,21 @@ void ble_gatt_free(BleGatt* gatt);
 
 /** scan must be stopped first, only one gap procedure runs at a time */
 bool ble_gatt_connect(BleGatt* gatt, const BleDevice* dev);
-/** blocks up to 1s until the link is down */
+/** returns at once, link down arrives as event */
 void ble_gatt_disconnect(BleGatt* gatt);
-/** call periodically, cancels connection attempts that hang */
+/** call periodically: cancels connection attempts that hang, hangs up abandoned links */
 void ble_gatt_tick(BleGatt* gatt);
 
 bool ble_gatt_discover_services(BleGatt* gatt);
 bool ble_gatt_discover_chars(BleGatt* gatt, uint8_t service_index);
-bool ble_gatt_read(BleGatt* gatt, uint8_t char_index);
-/** writes cccd, assumed at value handle + 1 (true for nearly all servers) */
-bool ble_gatt_set_notify(BleGatt* gatt, uint8_t char_index, bool enable);
+/** picks the characteristic the calls below work on */
+void ble_gatt_select(BleGatt* gatt, uint8_t char_index);
+bool ble_gatt_read(BleGatt* gatt);
+/** looks for its cccd, sets descs_done */
+bool ble_gatt_discover_descs(BleGatt* gatt);
+/** reads the char's 0x2901 name, sets desc_done */
+bool ble_gatt_read_desc(BleGatt* gatt);
+/** writes the cccd (indicate bit when the char only indicates), fails when none was found */
+bool ble_gatt_set_notify(BleGatt* gatt, bool enable);
 
 void ble_gatt_snapshot(BleGatt* gatt, BleGattInfo* out);

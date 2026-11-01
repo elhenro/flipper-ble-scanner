@@ -11,7 +11,10 @@ static const BleDevice devices[] = {
      .seen_count = 87, .company = 0x02E5, .connectable = true, .name = "Toaster 3000"},
     {.addr = {0x1D, 0xE5, 0x77, 0x02, 0x9B, 0x6A}, .addr_type = 1, .rssi = -47,
      .rssi_avg = -48.2f, .seen_count = 63, .company = BLE_COMPANY_APPLE,
-     .apple_type = APPLE_TYPE_PROXIMITY_PAIR, .apple_model = 0x0E20, .connectable = true},
+     .apple_type = APPLE_TYPE_PROXIMITY_PAIR, .apple_model = 0x0E20, .connectable = true,
+     .mf_len = 12, .mf = {0x07, 0x19, 0x01, 0x0E, 0x20, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+     .sd_len = 4, .sd_uuid = 0xFE9F, .sd = {0x00, 0x00, 0x01, 0x02},
+     .uuid_count = 3, .uuids = {0xFE9F, 0xFEAA, 0x180F}},
     {.addr = {0x0F, 0xEE, 0xC0, 0x11, 0xD7, 0xA0}, .rssi = -55, .rssi_avg = -54.9f,
      .seen_count = 41, .company = 0x006B, .connectable = true, .name = "Polar H10"},
     {.addr = {0x99, 0x12, 0x5C, 0x33, 0x8A, 0xF4}, .addr_type = 1, .rssi = -63,
@@ -66,10 +69,15 @@ int main(int argc, char** argv) {
     m.screen = BleScreenInfo;
     shot(canvas, &m, argv[1], "info");
 
+    m.peer = devices[0];
     m.screen = BleScreenDetail;
     shot(canvas, &m, argv[1], "detail");
 
-    m.peer = devices[0];
+    m.peer = devices[1];
+    m.detail_page = 1;
+    shot(canvas, &m, argv[1], "vendor");
+    m.detail_page = 0;
+
     m.gatt.state = BleGattStateReady;
     m.gatt.services_done = true;
     m.gatt.service_count = COUNT_OF(services);
@@ -89,6 +97,7 @@ int main(int argc, char** argv) {
     m.gatt.value_len = sizeof(model_number) - 1;
     memcpy(m.gatt.value, model_number, m.gatt.value_len);
     m.gatt.value_updates = 1;
+    strcpy(m.gatt.desc, "Model Number");
     m.screen = BleScreenValue;
     shot(canvas, &m, argv[1], "value");
     return 0;

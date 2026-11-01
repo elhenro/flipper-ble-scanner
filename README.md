@@ -14,6 +14,8 @@ of them are AirPods, and lets you explore the internals of the ones that allow a
 | nearby devices, strongest first | details, connect with OK | built-in help |
 | ![gatt services](docs/services.png) | ![characteristics](docs/chars.png) | ![value view](docs/value.png) |
 | services of a connected device | characteristics with R/W/N/I properties | read values and toggle notifications |
+| ![vendor data](docs/vendor.png) | | |
+| raw manufacturer / service data (Up/Down) | | |
 
 *Screenshots are rendered from the app's own drawing code, using the Flipper's own fonts.
 The devices are made up. No toasters were harmed.*
@@ -22,11 +24,17 @@ The devices are made up. No toasters were harmed.*
 
 - **Scan** (active): every advertiser nearby, sorted by smoothed RSSI, with a distance estimate
 - **Name things**: advertised names, plus decoded Apple Continuity data (AirPods/Beats models, Find My
-  tags, AirPlay targets, nearby iPhones and Macs) and common vendor IDs (Samsung, Google, Bose, Garmin, ...)
+  tags, AirPlay targets, nearby iPhones and Macs), common vendor IDs (Samsung, Google, Bose, Garmin, ...)
+  and vendor service UUIDs (Fast Pair, Eddystone, Garmin, MiBeacon, ...)
+- **Show vendor data**: Up/Down in the details screen dumps the device's raw manufacturer data, service
+  data and advertised 16-bit service UUIDs
 - **Connect** to connectable devices (marked `C`) and browse their GATT database: services,
-  characteristics, read values, and subscribe to notifications
-- **Log** a snapshot every 2 s to `/ext/apps_data/ble_scanner/scan.log`, handy over USB:
-  `storage read /ext/apps_data/ble_scanner/scan.log` in the Flipper CLI
+  characteristics with their human names, read values, and subscribe to notifications **and**
+  indications (confirmed on the app thread, they block the server otherwise)
+- **Dump** a service: hold OK on its characteristics to read every readable characteristic, one at a
+  time, and save them with their names to `/ext/apps_data/ble_scanner/gatt.log`
+- **Log** a snapshot every 2 s to `/ext/apps_data/ble_scanner/scan.log` while on USB power (on battery it
+  skips the SD writes): `storage read /ext/apps_data/ble_scanner/scan.log` in the Flipper CLI
 
 Distance is a guess, not a tape measure. It comes from the RSSI through a log-distance path-loss model,
 and walls, bodies and pockets can easily skew it by 2x. Calibrate it (see below) and treat it as
@@ -75,11 +83,11 @@ install the firmware with `flash-dfu` instead. Every later firmware change can g
 
 | Screen | Keys |
 |---|---|
-| **List** | Up/Down select, OK details, Left for info screen (2 pages), Back exit |
-| **Details** | OK connect (only devices marked `C`), Left/Right for 1 m reference ±1 dB, hold OK to calibrate the 1 m reference from this device |
+| **List** | Up/Down select, OK details, Left for info screen (3 pages), Back exit |
+| **Details** | OK connect (only devices marked `C`), Up/Down summary / vendor data, Left/Right for 1 m reference ±1 dB, hold OK to calibrate the 1 m reference from this device |
 | **Services** | Up/Down select, OK for characteristics, Back to disconnect |
-| **Characteristics** | Up/Down select, OK to open value, Back to go up one level |
-| **Value** | OK to read, Right to toggle notifications, Back to go up one level |
+| **Characteristics** | Up/Down select, OK to open value, hold OK to dump the service to `gatt.log`, Back to go up one level |
+| **Value** | OK to read, Right to toggle notifications/indications (offered once its CCCD is found), Back to go up one level |
 
 Calibrating: hold a device 1 m away, open its details and hold OK. Its smoothed RSSI becomes the 1 m reference.
 
@@ -97,8 +105,16 @@ Flags: `C` connectable, `R` answered an active scan request (in the log), proper
   three exports: `furi_hal_bt_start_scan`, `furi_hal_bt_stop_scan` and `furi_hal_bt_hci_command` (raw HCI/ACI).
 - **App**: receives raw HCI events through the already exported `ble_event_dispatcher_register_svc_handler`.
   It only claims events of its own central link, so your phone's connection to the Flipper keeps working.
+  Notifications are switched on through the CCCD found by a descriptor search, never a guessed handle.
+- **Descriptors**: the same search finds each characteristic's `0x2901` user description, which the value
+  screen shows as its title instead of a vendor UUID. Indications get `aci_gatt_confirm_indication` from the
+  main loop, since the BLE event thread cannot wait for an HCI command event.
+- **Errors**: ATT errors and disconnect reasons are printed with their spec names (`need pair`,
+  `peer left`, ...) instead of a bare code.
 - **Screenshots**: `tools/screenshots/render.sh` compiles the app's view code with Momentum's u8g2 and fonts
   on your computer and writes `docs/*.png`.
+- **Adv parsing check**: `tools/adv_test.c` is a host-side assert test for the advertisement parser and
+  vendor labels, see the compile line in its header.
 
 ## Undo
 

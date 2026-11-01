@@ -5,6 +5,10 @@
 #define BLE_SCAN_MAX_DEVICES 32
 #define BLE_SCAN_NAME_LEN    16
 #define BLE_SCAN_NO_COMPANY  0xFFFF
+// vendor data kept per device, cut to what the details page can show
+#define BLE_SCAN_MF_LEN   12 // manufacturer data after the company id
+#define BLE_SCAN_SD_LEN   4 // service data after its 16-bit uuid
+#define BLE_SCAN_UUID_MAX 3 // advertised 16-bit service uuids
 
 typedef struct {
     uint8_t addr[6]; // little-endian, as sent by controller
@@ -16,6 +20,13 @@ typedef struct {
     uint16_t company;
     uint8_t apple_type; // continuity message type, 0 = none
     uint16_t apple_model; // proximity pairing model id (airpods/beats)
+    uint8_t mf_len;
+    uint8_t mf[BLE_SCAN_MF_LEN]; // manufacturer data, company id in dev->company
+    uint8_t sd_len;
+    uint16_t sd_uuid;
+    uint8_t sd[BLE_SCAN_SD_LEN];
+    uint8_t uuid_count;
+    uint16_t uuids[BLE_SCAN_UUID_MAX];
     bool connectable;
     bool scan_rsp; // answered an active scan request
     char name[BLE_SCAN_NAME_LEN];

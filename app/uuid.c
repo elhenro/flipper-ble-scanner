@@ -50,17 +50,12 @@ static const uint8_t sig_base[12] =
     {0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00};
 
 void ble_uuid_format(char* buf, size_t size, const uint8_t* uuid, uint8_t uuid_len) {
-    uint16_t short_id = 0;
-    bool is_short = false;
-    if(uuid_len == 2) {
-        short_id = uuid[0] | (uuid[1] << 8);
-        is_short = true;
-    } else if(uuid_len == 16 && memcmp(uuid, sig_base, sizeof(sig_base)) == 0) {
-        short_id = uuid[12] | (uuid[13] << 8);
-        is_short = true;
-    }
+    // 16-bit id, plain or inside the sig base
+    bool sig = uuid_len == 16 && memcmp(uuid, sig_base, sizeof(sig_base)) == 0;
+    const uint8_t* id = uuid_len == 2 ? uuid : sig ? &uuid[12] : NULL;
 
-    if(is_short) {
+    if(id) {
+        uint16_t short_id = id[0] | (id[1] << 8);
         for(size_t i = 0; i < COUNT_OF(names); i++) {
             if(names[i].id == short_id) {
                 snprintf(buf, size, "%s", names[i].name);

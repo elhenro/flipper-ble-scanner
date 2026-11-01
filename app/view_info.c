@@ -16,10 +16,16 @@ static const BleInfoPage pages[BLE_INFO_PAGES] = {
       "Calibrate: hold OK at 1m"}},
     {"Keys",
      {"OK  details / connect",
-      "</>  ref dB (in details)",
+      "</> ref dB, Up/Dn adv",
       "Hold OK  set 1m ref",
-      "C connectable R answered",
+      "C  connectable device",
       "Back  up / exit"}},
+    {"GATT keys",
+     {"OK  read value",
+      "Right  notify/indicate",
+      "Hold OK  dump service",
+      "-> gatt.log over usb",
+      "Back  up / disconnect"}},
 };
 
 void ble_view_draw_info(Canvas* canvas, const BleViewModel* model) {

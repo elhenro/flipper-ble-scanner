@@ -23,6 +23,7 @@
 struct BleScan {
     FuriMutex* mutex;
     GapSvcEventHandler* handler;
+    bool active;
     BleDevice devices[BLE_SCAN_MAX_DEVICES];
     size_t count;
     uint32_t reports;
@@ -84,14 +85,19 @@ static BleEventAckStatus ble_scan_event_handler(void* event, void* context) {
 }
 
 BleScan* ble_scan_alloc(void) {
+    // zeroed by furi malloc
     BleScan* scan = malloc(sizeof(BleScan));
-    memset(scan, 0, sizeof(BleScan));
     scan->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     return scan;
 }
 
 void ble_scan_free(BleScan* scan) {
     ble_scan_stop(scan);
+    if(scan->handler) {
+        // let queued reports drain before unhooking, dispatcher list is not locked
+        furi_delay_ms(100);
+        ble_event_dispatcher_unregister_svc_handler(scan->handler);
+    }
     furi_mutex_free(scan->mutex);
     free(scan);
 }
@@ -101,35 +107,34 @@ bool ble_scan_is_supported(void) {
 }
 
 uint8_t ble_scan_start(BleScan* scan) {
-    if(scan->handler) return 0;
+    if(scan->active) return 0;
     if(!ble_scan_is_supported()) return BLE_SCAN_UNSUPPORTED;
 
-    scan->handler = ble_event_dispatcher_register_svc_handler(ble_scan_event_handler, scan);
+    // registered once for the app's lifetime: unhooking under traffic races the ble thread.
+    // newest handler runs first and gatt's is older, so reports never reach it
+    if(!scan->handler) {
+        scan->handler = ble_event_dispatcher_register_svc_handler(ble_scan_event_handler, scan);
+    }
     // active: names mostly live in scan responses
     uint8_t status = furi_hal_bt_start_scan(SCAN_INTERVAL, SCAN_WINDOW, true);
-    if(status) {
-        ble_event_dispatcher_unregister_svc_handler(scan->handler);
-        scan->handler = NULL;
-    }
+    scan->active = status == 0;
     return status;
 }
 
 void ble_scan_stop(BleScan* scan) {
-    if(!scan->handler) return;
+    if(!scan->active) return;
     furi_hal_bt_stop_scan();
-    // let queued reports drain before unhooking, dispatcher list is not locked
-    furi_delay_ms(100);
-    ble_event_dispatcher_unregister_svc_handler(scan->handler);
-    scan->handler = NULL;
+    scan->active = false;
 }
 
 size_t ble_scan_snapshot(BleScan* scan, BleDevice* out, size_t max, uint32_t max_age_ms) {
     uint32_t now = furi_get_tick();
+    uint32_t max_age = furi_ms_to_ticks(max_age_ms);
     size_t n = 0;
     furi_check(furi_mutex_acquire(scan->mutex, FuriWaitForever) == FuriStatusOk);
     for(size_t i = 0; i < scan->count && n < max; i++) {
         const BleDevice* dev = &scan->devices[i];
-        if(now - dev->last_seen > furi_ms_to_ticks(max_age_ms)) continue;
+        if(now - dev->last_seen > max_age) continue;
         // insertion sort by smoothed rssi, qsort is not exported to faps
         size_t j = n++;
         while(j > 0 && out[j - 1].rssi_avg < dev->rssi_avg) {

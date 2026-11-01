@@ -55,9 +55,27 @@ static const BleVendorEntry companies[] = {
     {0x0171, "Amazon"},
     {0x027D, "Huawei"},
     {0x038F, "Xiaomi"},
+    {0x0157, "Huami"},
+    {0x006B, "Polar"},
+    {0x0078, "Nike"},
+    {0x000A, "Qualcomm"},
+    {0x0008, "Motorola"},
+    {0x0002, "Intel"},
+    {0x000F, "Broadcom"},
+    {0x0001, "Nokia"},
     {0x0059, "Nordic"},
     {0x02E5, "Espressif"},
     {0x000D, "TI"},
+};
+
+// vendor specific service uuids that identify what an unnamed device is
+static const BleVendorEntry services[] = {
+    {0xFE9F, "Fast Pair"},
+    {0xFEAA, "Eddystone"},
+    {0xFD6F, "Trace tag"},
+    {0xFD5A, "Garmin"},
+    {0xFE95, "MiBeacon"},
+    {0xFE59, "Nordic DFU"},
 };
 
 static const char* ble_vendor_find(const BleVendorEntry* table, size_t count, uint16_t id) {
@@ -65,6 +83,10 @@ static const char* ble_vendor_find(const BleVendorEntry* table, size_t count, ui
         if(table[i].id == id) return table[i].label;
     }
     return NULL;
+}
+
+const char* ble_vendor_company_name(uint16_t id) {
+    return ble_vendor_find(companies, COUNT_OF(companies), id);
 }
 
 const char* ble_vendor_label(const BleDevice* dev) {
@@ -77,6 +99,13 @@ const char* ble_vendor_label(const BleDevice* dev) {
     }
     if(!label && dev->company != BLE_SCAN_NO_COMPANY) {
         label = ble_vendor_find(companies, COUNT_OF(companies), dev->company);
+    }
+    // unnamed, unknown vendor: the advertised service can still say what it is
+    for(uint8_t i = 0; !label && i < dev->uuid_count; i++) {
+        label = ble_vendor_find(services, COUNT_OF(services), dev->uuids[i]);
+    }
+    if(!label && dev->sd_uuid) {
+        label = ble_vendor_find(services, COUNT_OF(services), dev->sd_uuid);
     }
     return label;
 }

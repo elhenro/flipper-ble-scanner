@@ -4,23 +4,56 @@
 
 #include <stdio.h>
 
-#define ROW_H   10
-#define LIST_Y0 19
-
-static void ble_view_gatt_row(
-    Canvas* canvas,
-    size_t row,
-    bool selected,
-    const char* left,
-    const char* right) {
-    int32_t y = LIST_Y0 + row * ROW_H;
-    if(selected) {
-        canvas_draw_box(canvas, 0, y - 8, 128, ROW_H);
-        canvas_set_color(canvas, ColorWhite);
+// att error codes, core spec vol 3 part f 3.4.1.1
+static const char* ble_view_att_error(uint8_t code) {
+    switch(code) {
+    case 0x01:
+        return "bad handle";
+    case 0x02:
+        return "read denied";
+    case 0x03:
+        return "write denied";
+    case 0x05:
+        return "need pair";
+    case 0x06:
+        return "unsupported";
+    case 0x08:
+        return "auth busy";
+    case 0x0A:
+        return "not found";
+    case 0x0C:
+        return "key short";
+    case 0x0E:
+        return "need crypt";
+    case 0x0F:
+        return "unlikely";
+    case 0x12:
+        return "out of res";
+    default:
+        return NULL;
     }
-    canvas_draw_str(canvas, 2, y, left);
-    if(right) canvas_draw_str_aligned(canvas, 126, y, AlignRight, AlignBottom, right);
-    canvas_set_color(canvas, ColorBlack);
+}
+
+// hci disconnection reasons, spec vol 1 part f 2.1
+static const char* ble_view_link_error(uint8_t code) {
+    switch(code) {
+    case 0x08:
+        return "timeout";
+    case 0x13:
+        return "peer left";
+    case 0x14:
+        return "no resources";
+    case 0x15:
+        return "power off";
+    case 0x16:
+        return "local left";
+    case 0x3B:
+        return "bad params";
+    case 0x3E:
+        return "no link";
+    default:
+        return NULL;
+    }
 }
 
 // state line shared by all gatt screens, NULL when nothing to report
@@ -30,14 +63,19 @@ static const char* ble_view_gatt_status(const BleGattInfo* gatt, char* buf, size
         return "Connecting...";
     case BleGattStateBusy:
         return "Working...";
-    case BleGattStateFailed:
-        snprintf(buf, size, "Link down: 0x%02X", gatt->error);
+    case BleGattStateFailed: {
+        const char* name = ble_view_link_error(gatt->error);
+        if(name) snprintf(buf, size, "Down 0x%02X %s", gatt->error, name);
+        else snprintf(buf, size, "Link down: 0x%02X", gatt->error);
         return buf;
+    }
     case BleGattStateIdle:
         return "Disconnected";
     default:
         if(gatt->error) {
-            snprintf(buf, size, "Error 0x%02X", gatt->error);
+            const char* name = ble_view_att_error(gatt->error);
+            if(name) snprintf(buf, size, "Err 0x%02X %s", gatt->error, name);
+            else snprintf(buf, size, "Error 0x%02X", gatt->error);
             return buf;
         }
         return NULL;
@@ -47,9 +85,7 @@ static const char* ble_view_gatt_status(const BleGattInfo* gatt, char* buf, size
 static void ble_view_gatt_header(Canvas* canvas, const char* title, const BleGattInfo* gatt) {
     char status[24];
     const char* text = ble_view_gatt_status(gatt, status, sizeof(status));
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 0, 8, text ? text : title);
-    canvas_draw_line(canvas, 0, 10, 127, 10);
+    ble_view_header(canvas, text ? text : title, NULL);
 }
 
 static void ble_view_props(char* buf, uint8_t props) {
@@ -70,7 +106,7 @@ static void ble_view_draw_services(Canvas* canvas, const BleViewModel* model) {
         if(i >= gatt->service_count) break;
         char name[24];
         ble_uuid_format(name, sizeof(name), gatt->services[i].uuid, gatt->services[i].uuid_len);
-        ble_view_gatt_row(canvas, row, i == model->service_sel, name, NULL);
+        ble_view_row(canvas, row, i == model->service_sel, name, NULL, NULL);
     }
 }
 
@@ -79,6 +115,14 @@ static void ble_view_draw_chars(Canvas* canvas, const BleViewModel* model) {
     char title[24];
     const BleGattService* service = &gatt->services[model->service_sel];
     ble_uuid_format(title, sizeof(title), service->uuid, service->uuid_len);
+    // dump progress replaces the service name, the state line stays free for link errors
+    if(model->dump_state == 1) {
+        snprintf(title, sizeof(title), "Dump %u/%u", model->dump_done, model->dump_total);
+    } else if(model->dump_state == 2) {
+        snprintf(title, sizeof(title), "Dump saved");
+    } else if(model->dump_state == 3) {
+        snprintf(title, sizeof(title), "Dump failed");
+    }
     ble_view_gatt_header(canvas, title, gatt);
     for(size_t row = 0; row < BLE_VIEW_ROWS; row++) {
         size_t i = model->char_scroll + row;
@@ -87,7 +131,7 @@ static void ble_view_draw_chars(Canvas* canvas, const BleViewModel* model) {
         char props[5];
         ble_uuid_format(name, sizeof(name), gatt->chars[i].uuid, gatt->chars[i].uuid_len);
         ble_view_props(props, gatt->chars[i].props);
-        ble_view_gatt_row(canvas, row, i == model->char_sel, name, props);
+        ble_view_row(canvas, row, i == model->char_sel, name, NULL, props);
     }
 }
 
@@ -96,7 +140,8 @@ static void ble_view_draw_value(Canvas* canvas, const BleViewModel* model) {
     const BleGattChar* chr = &gatt->chars[model->char_sel];
     char line[32];
     ble_uuid_format(line, sizeof(line), chr->uuid, chr->uuid_len);
-    ble_view_gatt_header(canvas, line, gatt);
+    // the 0x2901 name says more than a vendor uuid, when the device has one
+    ble_view_gatt_header(canvas, gatt->desc[0] ? gatt->desc : line, gatt);
 
     // 8 bytes per hex line, 3 lines, then printable ascii of the same bytes
     for(uint8_t l = 0; l < 3 && l * 8 < gatt->value_len; l++) {
@@ -118,12 +163,12 @@ static void ble_view_draw_value(Canvas* canvas, const BleViewModel* model) {
     ble_view_props(props, chr->props);
     snprintf(line, sizeof(line), "%s %ub #%lu", props, gatt->value_len, gatt->value_updates);
     canvas_draw_str(canvas, 0, 62, line);
-    canvas_draw_str_aligned(
-        canvas, 127, 62, AlignRight, AlignBottom, gatt->notifying ? "> stop ntf" : "OK rd >ntf");
+    // notify needs the cccd, found by a descriptor search once the screen opens
+    const char* keys = gatt->notifying ? "> stop ntf" : gatt->cccd ? "OK rd >ntf" : "OK read";
+    canvas_draw_str_aligned(canvas, 127, 62, AlignRight, AlignBottom, keys);
 }
 
 void ble_view_draw_gatt(Canvas* canvas, const BleViewModel* model) {
-    canvas_set_font(canvas, FontSecondary);
     if(model->screen == BleScreenServices) {
         ble_view_draw_services(canvas, model);
     } else if(model->screen == BleScreenChars) {
