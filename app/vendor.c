@@ -14,23 +14,22 @@ static const BleVendorEntry apple_models[] = {
     {0x0F20, "AirPods 2"},
     {0x1320, "AirPods 3"},
     {0x0E20, "AirPods Pro"},
-    {0x1420, "AirPodsPro2"},
+    {0x1420, "AirPods Pro 2"},
     {0x0A20, "AirPods Max"},
     {0x0055, "AirTag"},
     {0x0030, "AirTag"},
     {0x1020, "Beats Flex"},
     {0x0620, "Beats Solo3"},
     {0x0320, "Powerbeats3"},
-    {0x0B20, "PowerbtsPro"},
-    {0x0C20, "BeatsSoloPr"},
-    {0x1120, "Beats Buds"},
-    {0x0520, "Beats X"},
-    {0x0920, "Beats Stu3"},
-    {0x1720, "BeatsStuPro"},
-    {0x1220, "BeatsFitPro"},
-    {0x1620, "Beats Buds+"},
+    {0x0B20, "Powerbeats Pro"},
+    {0x0C20, "Beats Solo Pro"},
+    {0x1120, "Beats Studio Buds"},
+    {0x0520, "BeatsX"},
+    {0x0920, "Beats Studio3"},
+    {0x1720, "Beats Studio Pro"},
+    {0x1220, "Beats Fit Pro"},
+    {0x1620, "Beats Studio Buds+"},
 };
-
 static const BleVendorEntry apple_types[] = {
     {APPLE_TYPE_PROXIMITY_PAIR, "AirPods/Bts"},
     {APPLE_TYPE_FIND_MY, "FindMy tag"},
@@ -112,7 +111,9 @@ const char* ble_vendor_label(const BleDevice* dev) {
 
 void ble_vendor_display_name(char* buf, size_t size, const BleDevice* dev) {
     const char* label = ble_vendor_label(dev);
-    if(dev->name[0]) {
+    if(dev->gatt_name[0]) {
+        snprintf(buf, size, "%s", dev->gatt_name);
+    } else if(dev->name[0]) {
         // adv names are untrusted bytes, font only has ascii
         size_t i = 0;
         for(; dev->name[i] && i < size - 1; i++) {

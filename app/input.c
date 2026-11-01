@@ -1,7 +1,5 @@
 #include "app_i.h"
 
-#include <math.h>
-
 #define TAG "BleScanner"
 
 static bool ble_input_is_press(const InputEvent* event) {
@@ -23,10 +21,11 @@ static void ble_input_move(uint8_t* sel, uint8_t* scroll, uint8_t count, InputKe
     ble_view_scroll(*sel, scroll);
 }
 
-static void ble_input_calibrate(BleViewModel* m, float rssi_avg) {
-    // device held at 1m becomes the path loss reference
-    m->ref = (int8_t)roundf(rssi_avg);
-    FURI_LOG_I(TAG, "calibrated ref %d", m->ref);
+// a reconnect can bring fewer services or chars than the cursor was left on
+static void ble_input_clamp(uint8_t* sel, uint8_t* scroll, uint8_t count) {
+    if(!count) return;
+    if(*sel >= count) *sel = count - 1;
+    ble_view_scroll(*sel, scroll);
 }
 
 static void ble_input_connect(BleScannerApp* app) {
@@ -48,9 +47,7 @@ static bool ble_input_list(BleScannerApp* app, const InputEvent* event) {
         return true;
     }
     if(!m->count) return true;
-    if(event->key == InputKeyOk && event->type == InputTypeLong) {
-        ble_input_calibrate(m, m->devices[m->selected].rssi_avg);
-    } else if(event->key == InputKeyOk && event->type == InputTypeShort) {
+    if(event->key == InputKeyOk && event->type == InputTypeShort) {
         m->peer = m->devices[m->selected];
         m->detail_page = 0;
         m->screen = BleScreenDetail;
@@ -72,19 +69,12 @@ static void ble_input_info(BleScannerApp* app, const InputEvent* event) {
 
 static void ble_input_detail(BleScannerApp* app, const InputEvent* event) {
     BleViewModel* m = &app->model;
-    bool step = event->key == InputKeyLeft || event->key == InputKeyRight;
     if(event->key == InputKeyBack && event->type == InputTypeShort) {
         m->screen = BleScreenList;
-    } else if(event->key == InputKeyOk && event->type == InputTypeLong) {
-        ble_input_calibrate(m, m->peer.rssi_avg);
     } else if(
         (event->key == InputKeyUp || event->key == InputKeyDown) &&
         event->type == InputTypeShort) {
         m->detail_page ^= 1;
-    } else if(step && ble_input_is_press(event)) {
-        // int8 would wrap from -128 to 127 when held
-        int32_t ref = m->ref + (event->key == InputKeyRight ? 1 : -1);
-        m->ref = CLAMP(ref, 0, -127);
     } else if(event->key == InputKeyOk && event->type == InputTypeShort) {
         if(m->peer.connectable) ble_input_connect(app);
     }
@@ -93,6 +83,7 @@ static void ble_input_detail(BleScannerApp* app, const InputEvent* event) {
 static void ble_input_services(BleScannerApp* app, const InputEvent* event) {
     BleViewModel* m = &app->model;
     const BleGattInfo* gatt = &m->gatt;
+    ble_input_clamp(&m->service_sel, &m->service_scroll, gatt->service_count);
     if(event->key == InputKeyBack && event->type == InputTypeShort) {
         ble_scanner_dump_cancel(app);
         ble_gatt_disconnect(app->gatt);
@@ -115,6 +106,7 @@ static void ble_input_services(BleScannerApp* app, const InputEvent* event) {
 static void ble_input_chars(BleScannerApp* app, const InputEvent* event) {
     BleViewModel* m = &app->model;
     const BleGattInfo* gatt = &m->gatt;
+    ble_input_clamp(&m->char_sel, &m->char_scroll, gatt->char_count);
     if(event->key == InputKeyBack && event->type == InputTypeShort) {
         ble_scanner_dump_cancel(app);
         m->dump_state = 0;
@@ -134,6 +126,12 @@ static void ble_input_chars(BleScannerApp* app, const InputEvent* event) {
 static void ble_input_value(BleScannerApp* app, const InputEvent* event) {
     BleViewModel* m = &app->model;
     const BleGattInfo* gatt = &m->gatt;
+    ble_input_clamp(&m->char_sel, &m->char_scroll, gatt->char_count);
+    // link loss or a re-discovery can empty the char list under the value screen
+    if(!gatt->char_count) {
+        m->screen = BleScreenChars;
+        return;
+    }
     uint8_t props = gatt->chars[m->char_sel].props;
     bool ready = gatt->state == BleGattStateReady;
     if(event->key == InputKeyBack && event->type == InputTypeShort) {

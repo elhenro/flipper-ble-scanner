@@ -26,6 +26,7 @@
 #define UUID_CHAR_DECLARATION       0x2803
 #define UUID_USER_DESC              0x2901
 #define UUID_CCCD                   0x2902
+#define UUID_DEVICE_NAME            0x2A00
 
 static uint16_t u16(const uint8_t* p) {
     return p[0] | (p[1] << 8);
@@ -120,6 +121,23 @@ static void ble_gatt_set_value(BleGattInfo* info, const uint8_t* value, uint8_t 
     info->value_updates++;
 }
 
+// the read that just landed was 0x2A00: keep it as the device's real name
+static void ble_gatt_remember_name(BleGattInfo* info) {
+    for(uint8_t i = 0; i < info->char_count; i++) {
+        const BleGattChar* c = &info->chars[i];
+        if(c->uuid_len != 2 || c->value_handle != info->value_handle) continue;
+        if((c->uuid[0] | (c->uuid[1] << 8)) != UUID_DEVICE_NAME) continue;
+        uint8_t len = MIN(info->value_len, BLE_SCAN_NAME_LEN - 1);
+        for(uint8_t j = 0; j < len; j++) {
+            char ch = info->value[j];
+            info->peer_name[j] = (ch >= 0x20 && ch < 0x7F) ? ch : '?';
+        }
+        info->peer_name[len] = '\0';
+        info->peer_name_set = len > 0;
+        return;
+    }
+}
+
 // descriptor names are remote bytes too, font only has ascii
 static void ble_gatt_set_desc(BleGattInfo* info, const uint8_t* value, uint8_t len) {
     len = MIN(len, BLE_GATT_NAME_LEN - 1);
@@ -156,6 +174,7 @@ static BleEventAckStatus ble_gatt_on_vendor(BleGatt* gatt, const uint8_t* d, uin
             info->desc_done = true;
         } else if(len >= 3) {
             ble_gatt_set_value(info, &d[3], MIN(d[2], len - 3));
+            ble_gatt_remember_name(info);
         }
         break;
     case ACI_INDICATION:

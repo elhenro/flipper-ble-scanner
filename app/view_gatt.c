@@ -112,9 +112,13 @@ static void ble_view_draw_services(Canvas* canvas, const BleViewModel* model) {
 
 static void ble_view_draw_chars(Canvas* canvas, const BleViewModel* model) {
     const BleGattInfo* gatt = &model->gatt;
-    char title[24];
-    const BleGattService* service = &gatt->services[model->service_sel];
-    ble_uuid_format(title, sizeof(title), service->uuid, service->uuid_len);
+    char title[24] = "";
+    // the cursor can outlive a shorter rediscovery, draw what the count allows
+    if(gatt->service_count) {
+        uint8_t sel = model->service_sel < gatt->service_count ? model->service_sel : 0;
+        const BleGattService* service = &gatt->services[sel];
+        ble_uuid_format(title, sizeof(title), service->uuid, service->uuid_len);
+    }
     // dump progress replaces the service name, the state line stays free for link errors
     if(model->dump_state == 1) {
         snprintf(title, sizeof(title), "Dump %u/%u", model->dump_done, model->dump_total);
@@ -137,9 +141,13 @@ static void ble_view_draw_chars(Canvas* canvas, const BleViewModel* model) {
 
 static void ble_view_draw_value(Canvas* canvas, const BleViewModel* model) {
     const BleGattInfo* gatt = &model->gatt;
-    const BleGattChar* chr = &gatt->chars[model->char_sel];
-    char line[32];
-    ble_uuid_format(line, sizeof(line), chr->uuid, chr->uuid_len);
+    char line[32] = "";
+    // the cursor can outlive a shorter rediscovery or a dropped link
+    bool has_chr = gatt->char_count != 0;
+    uint8_t sel = has_chr && model->char_sel < gatt->char_count ? model->char_sel : 0;
+    if(has_chr) {
+        ble_uuid_format(line, sizeof(line), gatt->chars[sel].uuid, gatt->chars[sel].uuid_len);
+    }
     // the 0x2901 name says more than a vendor uuid, when the device has one
     ble_view_gatt_header(canvas, gatt->desc[0] ? gatt->desc : line, gatt);
 
@@ -160,7 +168,7 @@ static void ble_view_draw_value(Canvas* canvas, const BleViewModel* model) {
     if(gatt->value_len) canvas_draw_str(canvas, 0, 48, line);
 
     char props[5];
-    ble_view_props(props, chr->props);
+    ble_view_props(props, has_chr ? gatt->chars[sel].props : 0);
     snprintf(line, sizeof(line), "%s %ub #%lu", props, gatt->value_len, gatt->value_updates);
     canvas_draw_str(canvas, 0, 62, line);
     // notify needs the cccd, found by a descriptor search once the screen opens

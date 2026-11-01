@@ -1,5 +1,4 @@
 #include "scan_log.h"
-#include "distance.h"
 #include "vendor.h"
 #include "uuid.h"
 
@@ -11,13 +10,19 @@ static void ble_scan_log_gatt(FuriString* out, const BleViewModel* model) {
     char uuid[24];
     furi_string_cat_printf(
         out,
-        "gatt screen %d state %d err 0x%02X services %u chars %u cccd %04X\n",
+        "gatt screen %d state %d err 0x%02X services %u chars %u cccd %04X",
         model->screen,
         g->state,
         g->error,
         g->service_count,
         g->char_count,
         g->cccd);
+    if(g->peer_set) {
+        char addr[18];
+        ble_view_format_addr(addr, g->peer_addr);
+        furi_string_cat_printf(out, " peer %s", addr);
+    }
+    furi_string_cat_str(out, "\n");
     for(uint8_t i = 0; i < g->service_count; i++) {
         ble_uuid_format(uuid, sizeof(uuid), g->services[i].uuid, g->services[i].uuid_len);
         furi_string_cat_printf(
@@ -41,12 +46,11 @@ bool ble_scan_log_enabled(void) {
 void ble_scan_log_format(FuriString* out, const BleViewModel* model) {
     furi_string_printf(
         out,
-        "tick %lu status 0x%02X reports %lu devices %u ref %d screen %d sel %u\n",
+        "tick %lu status 0x%02X reports %lu devices %u screen %d sel %u\n",
         furi_get_tick(),
         model->scan_status,
         model->reports,
         model->count,
-        model->ref,
         model->screen,
         model->selected);
     for(size_t i = 0; i < model->count; i++) {
@@ -57,14 +61,13 @@ void ble_scan_log_format(FuriString* out, const BleViewModel* model) {
         ble_vendor_display_name(label, sizeof(label), dev);
         furi_string_cat_printf(
             out,
-            "%s %s%s%s rssi %d avg %.1f dist %.2fm co %04X at %02X am %04X n %lu [%s]\n",
+            "%s %s%s%s rssi %d avg %.1f co %04X at %02X am %04X n %lu [%s]\n",
             addr,
             dev->addr_type ? "rnd" : "pub",
             dev->connectable ? " C" : "",
             dev->scan_rsp ? " R" : "",
             dev->rssi,
             (double)dev->rssi_avg,
-            (double)ble_distance_m(dev->rssi_avg, model->ref),
             dev->company,
             dev->apple_type,
             dev->apple_model,

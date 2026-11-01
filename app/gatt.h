@@ -54,8 +54,14 @@ typedef struct {
     uint16_t cccd; // its client config descriptor, 0 = none found
     bool descs_done;
     bool notifying; // notifications or indications enabled
+    // 0x2A00 value, the only real name apple devices ever hand out
+    char peer_name[BLE_SCAN_NAME_LEN];
+    bool peer_name_set;
     char desc[BLE_GATT_NAME_LEN]; // 0x2901 user description of the selected char
     bool desc_done; // search and read attempted, don't ask again
+    // connect target, survives the per-attempt info reset
+    uint8_t peer_addr[6];
+    bool peer_set;
 } BleGattInfo;
 
 typedef struct BleGatt BleGatt;

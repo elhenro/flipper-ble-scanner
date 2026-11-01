@@ -30,6 +30,8 @@ typedef struct {
     bool connectable;
     bool scan_rsp; // answered an active scan request
     char name[BLE_SCAN_NAME_LEN];
+    // 0x2A00 read over gatt, wins over the advertised name: apple never sends one
+    char gatt_name[BLE_SCAN_NAME_LEN];
 } BleDevice;
 
 typedef struct BleScan BleScan;
@@ -46,4 +48,6 @@ bool ble_scan_is_supported(void);
 
 /** copy devices seen within max_age_ms, strongest first, returns count */
 size_t ble_scan_snapshot(BleScan* scan, BleDevice* out, size_t max, uint32_t max_age_ms);
+/** keeps a name read over gatt on the device record, false if the device is gone */
+bool ble_scan_set_gatt_name(BleScan* scan, const uint8_t* addr, const char* name);
 uint32_t ble_scan_report_count(BleScan* scan);

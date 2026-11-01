@@ -1,5 +1,4 @@
 #include "view.h"
-#include "distance.h"
 #include "vendor.h"
 
 #include <stdio.h>
@@ -48,13 +47,14 @@ static void ble_view_draw_unsupported(Canvas* canvas) {
     canvas_set_font(canvas, FontSecondary);
     canvas_draw_str_aligned(canvas, 64, 22, AlignCenter, AlignTop, "Radio runs light stack");
     canvas_draw_str_aligned(canvas, 64, 32, AlignCenter, AlignTop, "(peripheral only).");
-    canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignTop, "Flash full stack + patched fw");
+    canvas_draw_str_aligned(
+        canvas, 64, 42, AlignCenter, AlignTop, "Flash full stack + patched fw");
 }
 
 static void ble_view_draw_list(Canvas* canvas, const BleViewModel* model) {
     char line[32];
     if(model->scanning) {
-        snprintf(line, sizeof(line), "SCAN %u dev ref%d", model->count, model->ref);
+        snprintf(line, sizeof(line), "SCAN %u  dBm", model->count);
     } else {
         snprintf(line, sizeof(line), "Scan failed: 0x%02X", model->scan_status);
     }
@@ -69,12 +69,12 @@ static void ble_view_draw_list(Canvas* canvas, const BleViewModel* model) {
         size_t i = model->scroll + row;
         if(i >= model->count) break;
         const BleDevice* dev = &model->devices[i];
-        char label[12];
-        char rssi[8];
+        // 14 chars end at x 86, clearing a "-100.0" (6 chars) right column from x 90
+        char label[15];
         ble_vendor_display_name(label, sizeof(label), dev);
-        snprintf(rssi, sizeof(rssi), "%d", (int)dev->rssi_avg);
-        snprintf(line, sizeof(line), "%.1fm", (double)ble_distance_m(dev->rssi_avg, model->ref));
-        ble_view_row(canvas, row, i == model->selected, label, rssi, line);
+        // one strength per row: the smoothed average, which is also the sort key
+        snprintf(line, sizeof(line), "%.1f", (double)dev->rssi_avg);
+        ble_view_row(canvas, row, i == model->selected, label, NULL, line);
     }
 }
 
@@ -100,24 +100,17 @@ static void ble_view_draw_detail(Canvas* canvas, const BleViewModel* model) {
     }
     canvas_draw_str(canvas, 0, 31, line);
 
-    snprintf(
-        line,
-        sizeof(line),
-        "RSSI %d avg %.1f n%lu",
-        dev->rssi,
-        (double)dev->rssi_avg,
-        dev->seen_count);
+    snprintf(line, sizeof(line), "RSSI %d avg %.1f", dev->rssi, (double)dev->rssi_avg);
     canvas_draw_str(canvas, 0, 41, line);
     snprintf(
         line,
         sizeof(line),
-        "~%.1fm (ref %d, n %.1f)",
-        (double)ble_distance_m(dev->rssi_avg, model->ref),
-        model->ref,
-        (double)BLE_DISTANCE_N);
+        "n %lu  %s",
+        dev->seen_count,
+        dev->connectable ? "connectable" : "scan only");
     canvas_draw_str(canvas, 0, 51, line);
     canvas_draw_str(
-        canvas, 0, 62, dev->connectable ? "OK conn  </> ref  hold: cal" : "</> ref dB  hold OK: cal");
+        canvas, 0, 62, dev->connectable ? "OK connect  Up/Dn page" : "Up/Dn page  scan only");
 }
 
 // "mf 4C 00 19" style dump, "-" when empty. buf 40 is enough
@@ -180,7 +173,8 @@ static void ble_view_draw_vendor(Canvas* canvas, const BleViewModel* model) {
     line[0] = '\0';
     size_t used = 0;
     for(uint8_t i = 0; i < dev->uuid_count && used + 6 < sizeof(line); i++) {
-        used += snprintf(line + used, sizeof(line) - used, "%s%04X", i ? " " : "uu ", dev->uuids[i]);
+        used +=
+            snprintf(line + used, sizeof(line) - used, "%s%04X", i ? " " : "uu ", dev->uuids[i]);
     }
     canvas_draw_str(canvas, 0, y, dev->uuid_count ? line : "uu -");
 }

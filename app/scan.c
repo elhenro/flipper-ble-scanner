@@ -127,6 +127,21 @@ void ble_scan_stop(BleScan* scan) {
     scan->active = false;
 }
 
+/** keeps a name read over gatt on the device record, returns false if it is gone */
+bool ble_scan_set_gatt_name(BleScan* scan, const uint8_t* addr, const char* name) {
+    bool found = false;
+    furi_check(furi_mutex_acquire(scan->mutex, FuriWaitForever) == FuriStatusOk);
+    for(size_t i = 0; i < scan->count; i++) {
+        BleDevice* dev = &scan->devices[i];
+        if(memcmp(dev->addr, addr, 6) != 0) continue;
+        strlcpy(dev->gatt_name, name, sizeof(dev->gatt_name));
+        found = true;
+        break;
+    }
+    furi_mutex_release(scan->mutex);
+    return found;
+}
+
 size_t ble_scan_snapshot(BleScan* scan, BleDevice* out, size_t max, uint32_t max_age_ms) {
     uint32_t now = furi_get_tick();
     uint32_t max_age = furi_ms_to_ticks(max_age_ms);

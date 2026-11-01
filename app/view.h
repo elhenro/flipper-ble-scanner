@@ -28,7 +28,6 @@ typedef struct {
     bool supported;
     bool scanning;
     uint8_t scan_status;
-    int8_t ref;
     uint32_t reports;
     // device shown in details and connected to. a copy, so it can't turn into another one
     BleDevice peer;
@@ -68,7 +67,7 @@ void ble_view_row(
 void ble_view_format_addr(char* buf, const uint8_t* addr);
 
 /** help pages (view_info.c) */
-#define BLE_INFO_PAGES 3
+#define BLE_INFO_PAGES 4
 void ble_view_draw_info(Canvas* canvas, const BleViewModel* model);
 
 /** services, characteristics and value screens (view_gatt.c) */

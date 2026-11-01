@@ -10,6 +10,8 @@ struct BleGatt {
     FuriMutex* mutex;
     GapSvcEventHandler* handler;
     uint16_t conn_handle;
+    uint8_t peer_addr[6]; // last connect target, for the log
+    bool peer_set;
     bool hanging_up; // disconnect sent, waiting for its event
     uint32_t connect_started;
     uint8_t value_char; // index of the selected characteristic

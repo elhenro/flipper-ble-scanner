@@ -121,6 +121,8 @@ bool ble_gatt_connect(BleGatt* gatt, const BleDevice* dev) {
 
     ble_gatt_lock(gatt);
     memset(&gatt->info, 0, sizeof(BleGattInfo));
+    memcpy(gatt->peer_addr, dev->addr, 6);
+    gatt->peer_set = true;
     gatt->connect_started = furi_get_tick();
     return ble_gatt_command(gatt, BleGattStateConnecting, OP_CREATE_CONNECTION, p, sizeof(p));
 }
@@ -166,5 +168,7 @@ void ble_gatt_disconnect(BleGatt* gatt) {
 void ble_gatt_snapshot(BleGatt* gatt, BleGattInfo* out) {
     ble_gatt_lock(gatt);
     *out = gatt->info;
+    memcpy(out->peer_addr, gatt->peer_addr, 6);
+    out->peer_set = gatt->peer_set;
     ble_gatt_unlock(gatt);
 }

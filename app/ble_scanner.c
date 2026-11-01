@@ -1,6 +1,5 @@
 #include "app_i.h"
 #include "scan_log.h"
-#include "distance.h"
 #include "uuid.h"
 #include "vendor.h"
 
@@ -171,9 +170,24 @@ void ble_scanner_dump_cancel(BleScannerApp* app) {
     app->model.dump_state = 0;
 }
 
+// a 0x2A00 read names the peer for good: apple phones never advertise one
+static void ble_scanner_apply_name(BleScannerApp* app) {
+    BleViewModel* m = &app->model;
+    if(!m->gatt.peer_name_set) return;
+    snprintf(m->peer.gatt_name, sizeof(m->peer.gatt_name), "%s", m->gatt.peer_name);
+    ble_scan_set_gatt_name(app->scan, m->peer.addr, m->gatt.peer_name);
+    for(uint8_t i = 0; i < m->count; i++) {
+        if(memcmp(m->devices[i].addr, m->peer.addr, 6) == 0) {
+            snprintf(m->devices[i].gatt_name, sizeof(m->devices[i].gatt_name), "%s", m->gatt.peer_name);
+            break;
+        }
+    }
+}
+
 static void ble_scanner_gatt_refresh(BleScannerApp* app) {
     BleViewModel* m = &app->model;
     ble_gatt_snapshot(app->gatt, &m->gatt);
+    ble_scanner_apply_name(app);
     // the dump issues its own reads and selects its own chars
     if(app->dumping) {
         ble_scanner_dump_step(app);
@@ -194,7 +208,6 @@ static void ble_scanner_gatt_refresh(BleScannerApp* app) {
 static BleScannerApp* ble_scanner_alloc(void) {
     // zeroed by furi malloc
     BleScannerApp* app = malloc(sizeof(BleScannerApp));
-    app->model.ref = BLE_DISTANCE_REF;
     app->model_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     app->input_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
     app->scan = ble_scan_alloc();

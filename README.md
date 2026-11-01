@@ -1,7 +1,7 @@
 # BLE Scanner for Flipper Zero
 
 Your Flipper has a Bluetooth radio, but out of the box it cannot *see* anything with it.
-This fixes that. It scans nearby BLE devices, estimates how far away they are, works out which
+This fixes that. It scans nearby BLE devices, shows how strong each one is, works out which
 of them are AirPods, and lets you explore the internals of the ones that allow a connection.
 
 > **Needs custom firmware.** The app runs only on a Flipper with this repo's patched Momentum build
@@ -22,7 +22,8 @@ The devices are made up. No toasters were harmed.*
 
 ## What it does
 
-- **Scan** (active): every advertiser nearby, sorted by smoothed RSSI, with a distance estimate
+- **Scan** (active): every advertiser nearby, sorted by smoothed RSSI, each row showing that average in
+  dBm; the details screen adds the latest reading
 - **Name things**: advertised names, plus decoded Apple Continuity data (AirPods/Beats models, Find My
   tags, AirPlay targets, nearby iPhones and Macs), common vendor IDs (Samsung, Google, Bose, Garmin, ...)
   and vendor service UUIDs (Fast Pair, Eddystone, Garmin, MiBeacon, ...)
@@ -36,9 +37,9 @@ The devices are made up. No toasters were harmed.*
 - **Log** a snapshot every 2 s to `/ext/apps_data/ble_scanner/scan.log` while on USB power (on battery it
   skips the SD writes): `storage read /ext/apps_data/ble_scanner/scan.log` in the Flipper CLI
 
-Distance is a guess, not a tape measure. It comes from the RSSI through a log-distance path-loss model,
-and walls, bodies and pockets can easily skew it by 2x. Calibrate it (see below) and treat it as
-"close / not close".
+Signal strength is shown as raw dBm, not as metres. Turning dBm into distance needs a path-loss model
+that walls, bodies and pockets break by 2x or more, so the app keeps to what the radio actually
+reports: current RSSI and the smoothed average the list is sorted by. Compare devices, not numbers.
 
 ## Why a custom firmware?
 
@@ -83,13 +84,11 @@ install the firmware with `flash-dfu` instead. Every later firmware change can g
 
 | Screen | Keys |
 |---|---|
-| **List** | Up/Down select, OK details, Left for info screen (3 pages), Back exit |
-| **Details** | OK connect (only devices marked `C`), Up/Down summary / vendor data, Left/Right for 1 m reference ±1 dB, hold OK to calibrate the 1 m reference from this device |
+| **List** | Up/Down select, OK details, Left for info screen (4 pages), Back exit |
+| **Details** | OK connect (only devices marked `C`), Up/Down summary / vendor data, Back to the list |
 | **Services** | Up/Down select, OK for characteristics, Back to disconnect |
 | **Characteristics** | Up/Down select, OK to open value, hold OK to dump the service to `gatt.log`, Back to go up one level |
 | **Value** | OK to read, Right to toggle notifications/indications (offered once its CCCD is found), Back to go up one level |
-
-Calibrating: hold a device 1 m away, open its details and hold OK. Its smoothed RSSI becomes the 1 m reference.
 
 Flags: `C` connectable, `R` answered an active scan request (in the log), properties `R`ead `W`rite
 `N`otify `I`ndicate.

@@ -61,7 +61,6 @@ int main(int argc, char** argv) {
     Canvas* canvas = canvas_host_alloc();
     static BleViewModel m;
     m.supported = m.scanning = true;
-    m.ref = -60;
     m.count = COUNT_OF(devices);
     memcpy(m.devices, devices, sizeof(devices));
     shot(canvas, &m, argv[1], "list");
